@@ -8,8 +8,8 @@ linters:
     - unused
     - gosimple
     - gofmt
-issues:
-  exclude-rules:
+exclusions:
+  rules:
     - path: _test\.go
       linters:
         - errcheck
