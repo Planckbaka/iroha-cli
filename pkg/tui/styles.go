@@ -33,9 +33,9 @@ var (
 			MarginTop(1)
 
 	StyleAgentHeader = lipgloss.NewStyle().
-			Foreground(ColorPrimary).
-			Bold(true).
-			MarginTop(1)
+				Foreground(ColorPrimary).
+				Bold(true).
+				MarginTop(1)
 
 	StyleToolHeader = lipgloss.NewStyle().
 			Foreground(ColorWarning).
@@ -44,9 +44,9 @@ var (
 			MarginTop(1)
 
 	StyleToolSuccess = lipgloss.NewStyle().
-			Foreground(ColorSuccess).
-			Bold(true).
-			MarginLeft(0)
+				Foreground(ColorSuccess).
+				Bold(true).
+				MarginLeft(0)
 
 	StyleToolError = lipgloss.NewStyle().
 			Foreground(ColorDanger).

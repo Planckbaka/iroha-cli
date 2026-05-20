@@ -1,0 +1,27 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - revive
+    - unused
+    - staticcheck
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    staticcheck:
+      checks:
+        - all
+        - -QF* # style refactor suggestions
+        - -ST1* # doc comment style rules
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+formatters:
+  enable:
+    - gofmt

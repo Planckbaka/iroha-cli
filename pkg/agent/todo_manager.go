@@ -13,9 +13,9 @@ type TodoItem struct {
 }
 
 type TodoManager struct {
-	mu                 sync.RWMutex
-	items              []TodoItem
-	roundsSinceUpdate  int
+	mu                sync.RWMutex
+	items             []TodoItem
+	roundsSinceUpdate int
 }
 
 var GlobalTodoManager = &TodoManager{

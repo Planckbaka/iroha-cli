@@ -62,5 +62,5 @@ func RenderTodoDashboard() string {
 		MarginTop(1).
 		MarginBottom(1)
 
-	return headerStyle.Render("📋  go-claude 任务规划进度面板\n\n" + todoRender) + "\n"
+	return headerStyle.Render("📋  go-claude 任务规划进度面板\n\n"+todoRender) + "\n"
 }
