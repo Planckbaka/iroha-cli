@@ -7,6 +7,15 @@ linters:
     - revive
     - unused
     - staticcheck
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    staticcheck:
+      checks:
+        - all
+        - -QF* # style suggestions, enable later
   exclusions:
     rules:
       - path: _test\.go
