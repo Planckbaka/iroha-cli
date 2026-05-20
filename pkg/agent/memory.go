@@ -80,7 +80,7 @@ type MemoryEntry struct {
 type MemoryManager struct {
 	mu      sync.RWMutex
 	entries map[string]*MemoryEntry // keyed by Name
-	dirs    []string               // loaded directory paths (for display)
+	dirs    []string                // loaded directory paths (for display)
 }
 
 // GlobalMemoryManager is the singleton used throughout the session.

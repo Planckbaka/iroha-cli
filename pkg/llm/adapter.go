@@ -81,12 +81,12 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 					return
 				}
 				time.Sleep(30 * time.Millisecond)
-				
+
 				end := i + 6
 				if end > len(response) {
 					end = len(response)
 				}
-				
+
 				chunk := response[i:end]
 				yield(&model.LLMResponse{
 					Content: &genai.Content{
@@ -150,7 +150,7 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 		// Standard streaming text response
 		prefix := fmt.Sprintf("[%s] 您好！我是 go-claude CLI 助手。我收到了您的输入：\"%s\"。\n\n这里是为您实时流式生成的思考过程：\n\n", s.modelName, userPrompt)
 		body := "1. **理解意图**：用户正在测试 CLI 终端的功能。\n2. **执行规划**：展示平滑的流式输出，高亮显示 Lipgloss 样式和 Glamour 语法渲染。\n3. **输出生成**：流式传输此响应。\n\n```go\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello, modern interactive CLI Agent!\")\n}\n```\n\n您可以尝试输入 `运行测试` 或是 `创建文件` 来查看**敏感工具的三阶段人机确认交互机制**！"
-		
+
 		fullResponse := prefix + body
 		for i := 0; i < len(fullResponse); i += 6 {
 			if ctx.Err() != nil {

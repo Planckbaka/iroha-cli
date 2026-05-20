@@ -79,7 +79,7 @@ func RunConfigWizard() (*Config, error) {
 	fmt.Println("     [g] glm       - 智谱 AI GLM-4 官方 API")
 	fmt.Println("     [o] openai    - OpenAI 官方或任何兼容第三方 API (DeepSeek/Qwen/Ollama)")
 	fmt.Printf("     当前选择: \x1b[33m%s\x1b[0m\n", existing.Provider)
-	
+
 	fmt.Print("     选择提供商 (s/g/o) [回车不修改]: ")
 	providerInput, _ := reader.ReadString('\n')
 	providerInput = strings.TrimSpace(strings.ToLower(providerInput))

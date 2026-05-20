@@ -182,7 +182,7 @@ func (g *GLMAdapter) CompactRequestContents(req *model.LLMRequest) []*genai.Cont
 
 					// Replace with micro-compaction placeholder
 					p.FunctionResponse.Response = map[string]any{
-						"output": fmt.Sprintf("[Tool \"%s\" output: %d bytes of output. (Full output archived to %s)]", 
+						"output": fmt.Sprintf("[Tool \"%s\" output: %d bytes of output. (Full output archived to %s)]",
 							p.FunctionResponse.Name, len(respStr), archivePath),
 					}
 				}
@@ -193,21 +193,21 @@ func (g *GLMAdapter) CompactRequestContents(req *model.LLMRequest) []*genai.Cont
 	// 3. Perform Conversational Summarization if total messages > 12
 	if len(contents) > 12 {
 		compacted := make([]*genai.Content, 0)
-		
+
 		// Keep the first round (which contains the user's initial prompt)
 		compacted = append(compacted, contents[0])
 
 		// Summarize the middle rounds (from index 1 to len(contents) - 5)
 		var middlePrompts []string
 		var middleTools []string
-		
+
 		for i := 1; i < len(contents)-4; i++ {
 			c := contents[i]
 			role := c.Role
 			if role == "" || role == "model" {
 				role = "assistant"
 			}
-			
+
 			for _, p := range c.Parts {
 				if p.Text != "" {
 					if role == "user" {
@@ -226,7 +226,7 @@ func (g *GLMAdapter) CompactRequestContents(req *model.LLMRequest) []*genai.Cont
 		}
 
 		// Build a highly compact system instruction summarizing completed steps
-		summaryContent := fmt.Sprintf("[System: Previous conversational history compacted. Summary of completed steps:\nPrompts: %s\nTools Executed: %s]", 
+		summaryContent := fmt.Sprintf("[System: Previous conversational history compacted. Summary of completed steps:\nPrompts: %s\nTools Executed: %s]",
 			strings.Join(middlePrompts, " | "), strings.Join(middleTools, ", "))
 
 		systemSummary := &genai.Content{
@@ -238,7 +238,7 @@ func (g *GLMAdapter) CompactRequestContents(req *model.LLMRequest) []*genai.Cont
 		compacted = append(compacted, systemSummary)
 
 		// Keep the last 4 rounds
-		for i := len(contents)-4; i < len(contents); i++ {
+		for i := len(contents) - 4; i < len(contents); i++ {
 			compacted = append(compacted, contents[i])
 		}
 
@@ -287,7 +287,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			if role == "" || role == "model" {
 				role = "assistant"
 			}
-			
+
 			var textParts []string
 			var toolCalls []glmToolCall
 
@@ -532,12 +532,12 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 					return
 				}
 				time.Sleep(25 * time.Millisecond)
-				
+
 				end := i + 6
 				if end > len(response) {
 					end = len(response)
 				}
-				
+
 				chunk := response[i:end]
 				yield(&model.LLMResponse{
 					Content: &genai.Content{
@@ -600,7 +600,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 		// Standard GLM response
 		prefix := fmt.Sprintf("🇨🇳 **[GLM-4 智谱引擎仿真测试]** 您好！我是基于智谱大模型驱动的 go-claude 智能研发助手。\n\n我收到了您的指令：\"%s\"。\n\n", userPrompt)
 		body := "智谱大语言模型具备极强的代码检索与多轮敏感命令交互能力。\n\n```go\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello, Zhipu GLM-4 with ADK-Go!\")\n}\n```\n\n您可以随时在仿真终端下测试敏感操作：\n- 输入 `运行测试` 触发 `shell_run` 并拦截确认；\n- 输入 `创建文件` 触发 `file_write` 并拦截确认。"
-		
+
 		fullResponse := prefix + body
 		for i := 0; i < len(fullResponse); i += 6 {
 			if ctx.Err() != nil {

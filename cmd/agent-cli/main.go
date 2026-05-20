@@ -130,7 +130,7 @@ func main() {
 
 	// 6. Create the Bubble Tea Program
 	p := tea.NewProgram(m)
-	
+
 	// Inject the program reference back into the model via ProgramRef pointer
 	m.ProgramRef.P = p
 

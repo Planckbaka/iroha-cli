@@ -342,4 +342,3 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	return result, nil
 }
-

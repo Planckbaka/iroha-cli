@@ -1,4 +1,5 @@
 /agent-cli
+dist/
 .omc/
 .go-claude/
 .claude/
