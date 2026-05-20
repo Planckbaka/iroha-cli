@@ -1,0 +1,5 @@
+/agent-cli
+.omc/
+.go-claude/
+.claude/
+scratch/
