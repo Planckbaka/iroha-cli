@@ -7,9 +7,11 @@ linters:
     - revive
     - unused
     - gosimple
-    - gofmt
   exclusions:
     rules:
       - path: _test\.go
         linters:
           - errcheck
+formatters:
+  enable:
+    - gofmt
