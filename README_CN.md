@@ -117,6 +117,13 @@ pkg/llm  pkg/tui pkg/config
      是否授权执行此操作？ (y/n/a)
 ```
 
+## 社区
+
+- [贡献指南](.github/CONTRIBUTING.md)
+- [行为准则](.github/CODE_OF_CONDUCT.md)
+- [安全策略](.github/SECURITY.md)
+- [支持](.github/SUPPORT.md)
+
 ## 许可证
 
 [Apache-2.0](LICENSE)
