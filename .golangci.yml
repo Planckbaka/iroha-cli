@@ -15,7 +15,8 @@ linters:
     staticcheck:
       checks:
         - all
-        - -QF* # style suggestions, enable later
+        - -QF* # style refactor suggestions
+        - -ST1* # doc comment style rules
   exclusions:
     rules:
       - path: _test\.go

@@ -392,7 +392,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			yield(nil, fmt.Errorf("调用智谱 API 失败: %w", err))
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
