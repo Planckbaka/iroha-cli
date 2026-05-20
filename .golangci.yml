@@ -6,7 +6,7 @@ linters:
     - govet
     - revive
     - unused
-    - gosimple
+    - staticcheck
   exclusions:
     rules:
       - path: _test\.go
