@@ -1,6 +1,6 @@
 # Support
 
-For help using `iroha-cli`:
+For help using `go-claude`:
 
 - Read the README for setup and usage.
 - Open a GitHub issue for bugs or missing behavior.

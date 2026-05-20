@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `iroha-cli`.
+Thanks for helping improve `go-claude`.
 
 ## Before you start
 
