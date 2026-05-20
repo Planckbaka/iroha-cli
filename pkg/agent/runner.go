@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go-claude/pkg/llm"
@@ -26,6 +27,10 @@ func init() {
 	}
 	llm.NoteRoundWithoutUpdate = func() {
 		GlobalTodoManager.NoteRoundWithoutUpdate()
+	}
+	llm.SystemPromptTrigger = func() string {
+		builder := NewSystemPromptBuilder()
+		return builder.Build()
 	}
 }
 
@@ -121,6 +126,7 @@ func (cr *CustomRunner) ModelName() string {
 
 // Execute handles running a prompt asynchronously and piping events to a callback
 func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt string, onEvent func(*session.Event), onError func(error), onDone func()) {
+	GlobalToolCircuitBreaker.Reset()
 	go func() {
 		userMsg := &genai.Content{
 			Role: "user",
@@ -323,6 +329,24 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	// ── Stage B: Execute the real tool ───────────────────────────────────
 	result, err := runnable.Run(ctx, args)
+
+	// Circuit breaker check
+	isFailure := err != nil
+	if !isFailure && result != nil && b.Name() == "shell_run" {
+		if ec, ok := result["exit_code"]; ok {
+			if ecInt, ok := ec.(int); ok && ecInt != 0 {
+				isFailure = true
+			} else if ecFloat, ok := ec.(float64); ok && ecFloat != 0 {
+				isFailure = true
+			}
+		}
+	}
+
+	count := GlobalToolCircuitBreaker.Track(b.Name(), args, isFailure)
+	if isFailure && count >= 3 {
+		return nil, fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -342,3 +366,43 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	return result, nil
 }
+
+// ToolCircuitBreaker tracks consecutive failures of the same tool with the same arguments
+type ToolCircuitBreaker struct {
+	mu           sync.Mutex
+	lastTool     string
+	lastArgsStr  string
+	failureCount int
+}
+
+func (cb *ToolCircuitBreaker) Track(toolName string, args any, isFailure bool) int {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	argsStr := fmt.Sprintf("%v", args)
+	if isFailure {
+		if cb.lastTool == toolName && cb.lastArgsStr == argsStr {
+			cb.failureCount++
+		} else {
+			cb.lastTool = toolName
+			cb.lastArgsStr = argsStr
+			cb.failureCount = 1
+		}
+		return cb.failureCount
+	} else {
+		if cb.lastTool == toolName && cb.lastArgsStr == argsStr {
+			cb.failureCount = 0
+		}
+		return 0
+	}
+}
+
+func (cb *ToolCircuitBreaker) Reset() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.lastTool = ""
+	cb.lastArgsStr = ""
+	cb.failureCount = 0
+}
+
+var GlobalToolCircuitBreaker = &ToolCircuitBreaker{}

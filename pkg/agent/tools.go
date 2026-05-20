@@ -2,15 +2,43 @@ package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
+
+// WrapToolError enriches tool errors with actionable self-correction suggestions for the LLM
+func WrapToolError(toolName string, args any, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	errMsg := err.Error()
+
+	// 1. Check for file not exist
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(errMsg, "no such file or directory") {
+		return fmt.Errorf("%w\n【自我修复建议】请检查文件路径是否正确。如果是拼写错误，请使用 file_read/grep/search_grep 重新确认当前目录结构，或确认目标文件是否存在。", err)
+	}
+
+	// 2. Check for permission issues
+	if errors.Is(err, os.ErrPermission) || strings.Contains(errMsg, "permission denied") {
+		return fmt.Errorf("%w\n【自我修复建议】您似乎没有该路径的读写权限。请尝试写入至工作区（当前目录）下的其他位置，或使用 shell_run 检查权限及目录属性。", err)
+	}
+
+	// 3. Command execution failed
+	if toolName == "shell_run" {
+		return fmt.Errorf("%w\n【自我修复建议】如果该命令失败是因为语法错误、参数错误或缺少本地依赖依赖，请先确认本地开发环境。如果缺少某个工具，可以尝试让用户授权安装依赖，或换用其他 Go 命令完成编译或测试工作。", err)
+	}
+
+	return err
+}
 
 // 1. file_read
 type FileReadArgs struct {
@@ -24,7 +52,7 @@ type FileReadResult struct {
 func FileReadHandler(ctx tool.Context, args FileReadArgs) (FileReadResult, error) {
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
-		return FileReadResult{}, fmt.Errorf("读取文件失败: %w", err)
+		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
 	}
 	return FileReadResult{Content: string(data)}, nil
 }
@@ -40,9 +68,17 @@ type FileWriteResult struct {
 }
 
 func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
+	// Create parent directories if they don't exist
+	dir := filepath.Dir(args.Path)
+	if dir != "." && dir != "/" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("创建父目录失败: %w", err))
+		}
+	}
+
 	err := os.WriteFile(args.Path, []byte(args.Content), 0644)
 	if err != nil {
-		return FileWriteResult{Success: false}, fmt.Errorf("写入文件失败: %w", err)
+		return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("写入文件失败: %w", err))
 	}
 	return FileWriteResult{Success: true}, nil
 }
@@ -130,8 +166,14 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 		}
 	}
 
+	outputStr := out.String()
+	if exitCode != 0 {
+		wrappedErr := WrapToolError("shell_run", args, fmt.Errorf("命令运行失败 (exit code %d)", exitCode))
+		outputStr += "\n" + wrappedErr.Error()
+	}
+
 	return ShellRunResult{
-		Output:   out.String(),
+		Output:   outputStr,
 		ExitCode: exitCode,
 	}, nil
 }

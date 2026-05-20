@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 // Decoupled callbacks to prevent circular dependencies
 var NagReminderTrigger func() string
 var NoteRoundWithoutUpdate func()
+var SystemPromptTrigger func() string
 
 // GLMAdapter integrates Zhipu AI GLM-4 (OpenAI-compatible) into ADK
 type GLMAdapter struct {
@@ -280,8 +283,28 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			}
 		}
 
+		// Build dynamic system prompt
+		var systemPrompt string
+		if SystemPromptTrigger != nil {
+			systemPrompt = SystemPromptTrigger()
+		} else if req.Config != nil && req.Config.SystemInstruction != nil {
+			var parts []string
+			for _, p := range req.Config.SystemInstruction.Parts {
+				if p.Text != "" {
+					parts = append(parts, p.Text)
+				}
+			}
+			systemPrompt = strings.Join(parts, "\n")
+		}
+
 		// 1. Convert compactedContents to Zhipu GLM message list
 		var messages []glmMessage
+		if systemPrompt != "" {
+			messages = append(messages, glmMessage{
+				Role:    "system",
+				Content: systemPrompt,
+			})
+		}
 		for _, c := range compactedContents {
 			role := c.Role
 			if role == "" || role == "model" {
@@ -377,28 +400,92 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(reqBytes))
-		if err != nil {
-			yield(nil, fmt.Errorf("创建 HTTP 请求失败: %w", err))
+		var resp *http.Response
+		var lastErr error
+		maxRetries := 3
+
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			if attempt > 0 {
+				// Calculate exponential backoff: 1s, 2s, 4s, ...
+				delaySec := 1.0 * math.Pow(2.0, float64(attempt-1))
+				// Add +/- 20% randomized jitter
+				jitter := (rand.Float64() * 0.4) - 0.2
+				delaySec = delaySec + (delaySec * jitter)
+				if delaySec > 10.0 {
+					delaySec = 10.0
+				}
+				if delaySec < 1.0 {
+					delaySec = 1.0
+				}
+
+				// Stream warning to TUI
+				warnMsg := fmt.Sprintf("\n⚠️  [网络异常] 正在尝试第 %d/%d 次自动重试，等待约 %.1f 秒...\n", attempt, maxRetries, delaySec)
+				yield(&model.LLMResponse{
+					Content: &genai.Content{
+						Role: "model",
+						Parts: []*genai.Part{
+							{Text: warnMsg},
+						},
+					},
+					Partial:      true,
+					TurnComplete: false,
+				}, nil)
+
+				// Sleep with context support
+				select {
+				case <-ctx.Done():
+					yield(nil, ctx.Err())
+					return
+				case <-time.After(time.Duration(delaySec * float64(time.Second))):
+				}
+			}
+
+			httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(reqBytes))
+			if err != nil {
+				lastErr = fmt.Errorf("创建 HTTP 请求失败: %w", err)
+				continue
+			}
+
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
+
+			client := &http.Client{
+				Timeout: 30 * time.Second,
+			}
+
+			resp, err = client.Do(httpReq)
+			if err != nil {
+				lastErr = fmt.Errorf("调用智谱 API 失败: %w", err)
+				continue
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+
+				isTransient := resp.StatusCode == 429 || resp.StatusCode >= 500
+				lastErr = fmt.Errorf("智谱 API 返回错误码 %d: %s", resp.StatusCode, string(bodyBytes))
+
+				if isTransient {
+					continue
+				} else {
+					// Non-transient error, fail immediately
+					yield(nil, lastErr)
+					return
+				}
+			}
+
+			// Success
+			lastErr = nil
+			break
+		}
+
+		if lastErr != nil {
+			yield(nil, lastErr)
 			return
 		}
 
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
-
-		client := &http.Client{}
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			yield(nil, fmt.Errorf("调用智谱 API 失败: %w", err))
-			return
-		}
 		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("智谱 API 返回错误码 %d: %s", resp.StatusCode, string(bodyBytes)))
-			return
-		}
 
 		// 5. Parse Server-Sent Events (SSE) stream
 		reader := bufio.NewReader(resp.Body)
@@ -514,6 +601,98 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 					userPrompt = part.Text
 				}
 			}
+		}
+
+		if strings.Contains(userPrompt, "test_error_network") {
+			// Yield warning
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{Text: "\n⚠️  [网络异常] 正在尝试第 1/3 次自动重试，等待约 1.0 秒...\n"},
+					},
+				},
+				Partial:      true,
+				TurnComplete: false,
+			}, nil)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+			}
+
+			// Yield warning 2
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{Text: "\n⚠️  [网络异常] 正在尝试第 2/3 次自动重试，等待约 2.0 秒...\n"},
+					},
+				},
+				Partial:      true,
+				TurnComplete: false,
+			}, nil)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+			}
+
+			// Then succeed!
+			response := "\n✅ [网络已恢复] 重试成功！仿真网络恢复测试已顺利完成。\n\n您刚才触发了 `test_error_network` 命令。go-claude 能够自动识别网络异常，执行指数级退避与随机抖动重试，并在终端为您实时渲染可视化的重试进度，直至顺利取得 API 回复。"
+			for i := 0; i < len(response); i += 6 {
+				if ctx.Err() != nil {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+				end := i + 6
+				if end > len(response) {
+					end = len(response)
+				}
+				yield(&model.LLMResponse{
+					Content: &genai.Content{
+						Role: "model",
+						Parts: []*genai.Part{
+							{Text: response[i:end]},
+						},
+					},
+					Partial:      true,
+					TurnComplete: false,
+				}, nil)
+			}
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{Text: ""},
+					},
+				},
+				Partial:      false,
+				TurnComplete: true,
+			}, nil)
+			return
+		}
+
+		if strings.Contains(userPrompt, "test_error_tool") {
+			// Trigger a file_read tool call on a nonexistent file to test error recovery
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: "file_read",
+								Args: map[string]any{"path": "nonexistent_file_test_error.txt"},
+							},
+						},
+					},
+				},
+				Partial:      false,
+				TurnComplete: false,
+			}, nil)
+			return
 		}
 
 		hasToolResponse := false

@@ -56,6 +56,7 @@ type Model struct {
 	Ctx                context.Context
 	Cancel             context.CancelFunc
 	ProgramRef         *ProgramRef
+	LastError          error
 
 	// Callback closures to avoid nil pointer program issues
 	OnEvent func(*session.Event)
@@ -326,6 +327,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.TextInput.SetValue("")
 						return m, nil
 					}
+
+					if cmdName == "/prompt" {
+						m.HistoryManager.Add(inputVal)
+						userLog := StyleUserMsg.Render("> " + inputVal)
+
+						builder := agent.NewSystemPromptBuilder()
+						fullPrompt := builder.Build()
+
+						var sb strings.Builder
+						sb.WriteString("📋 " + StyleKeyActive.Render("当前活跃的系统提示词(System Prompt):") + "\n")
+						sb.WriteString("--------------------------------------------------------------------------------\n")
+						sb.WriteString(fullPrompt + "\n")
+						sb.WriteString("--------------------------------------------------------------------------------\n")
+						sb.WriteString("  " + StyleKeyHelp.Render(fmt.Sprintf("提示词字数统计: %d 字符", len(fullPrompt))))
+
+						m.History = append(m.History, userLog, sb.String())
+						m.TextInput.SetValue("")
+						return m, nil
+					}
+
+					if cmdName == "/sections" {
+						m.HistoryManager.Add(inputVal)
+						userLog := StyleUserMsg.Render("> " + inputVal)
+
+						builder := agent.NewSystemPromptBuilder()
+						fullPrompt := builder.Build()
+
+						var sb strings.Builder
+						sb.WriteString("🗂️ " + StyleKeyActive.Render("系统提示词区块与结构大纲:") + "\n\n")
+
+						lines := strings.Split(fullPrompt, "\n")
+						sectionIdx := 1
+						for _, line := range lines {
+							lineTrimmed := strings.TrimSpace(line)
+							if strings.HasPrefix(lineTrimmed, "# ") {
+								sb.WriteString(fmt.Sprintf("  %d. %s\n", sectionIdx, lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(strings.TrimPrefix(lineTrimmed, "# "))))
+								sectionIdx++
+							} else if strings.HasPrefix(lineTrimmed, "## ") {
+								sb.WriteString(fmt.Sprintf("     • %s\n", lipgloss.NewStyle().Foreground(ColorWarning).Render(strings.TrimPrefix(lineTrimmed, "## "))))
+							} else if strings.HasPrefix(lineTrimmed, "### ") {
+								sb.WriteString(fmt.Sprintf("       - %s\n", lipgloss.NewStyle().Foreground(ColorSuccess).Render(strings.TrimPrefix(lineTrimmed, "### "))))
+							} else if strings.HasPrefix(lineTrimmed, "#### ") {
+								sb.WriteString(fmt.Sprintf("         ▪ %s\n", lipgloss.NewStyle().Foreground(ColorSecondary).Render(strings.TrimPrefix(lineTrimmed, "#### "))))
+							} else if lineTrimmed == "=== DYNAMIC_BOUNDARY ===" {
+								sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("⚡ === DYNAMIC CACHING BOUNDARY ===") + "\n")
+							}
+						}
+
+						sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 输入 /prompt 可查看每个区块的完整内容"))
+
+						m.History = append(m.History, userLog, sb.String())
+						m.TextInput.SetValue("")
+						return m, nil
+					}
 				}
 
 				// Record in history
@@ -394,7 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case AgentErrorMsg:
-		m.StreamedText += fmt.Sprintf("\n\x1b[31m[Agent 运行出错: %v]\x1b[0m", msg.Err)
+		m.LastError = msg.Err
 		m.finalizeTurn()
 		return m, nil
 
@@ -420,7 +475,15 @@ func (m *Model) finalizeTurn() {
 	m.State = statePrompt
 	// Append current turn to static scrollback history in clean shell style
 	userLog := StyleUserMsg.Render("> " + m.CurrentPrompt)
-	agentLog := RenderMarkdown(m.StreamedText)
+	
+	var agentLog string
+	if m.LastError != nil {
+		agentLog = RenderErrorCard(m.LastError)
+		m.LastError = nil // Reset
+	} else {
+		agentLog = RenderMarkdown(m.StreamedText)
+	}
+	
 	m.History = append(m.History, userLog, agentLog)
 	m.TextInput.Focus()
 }
