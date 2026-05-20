@@ -26,7 +26,7 @@ Core library packages implementing the agent system, LLM integration, configurat
 - Each package is independently testable
 
 ### Common Patterns
-- Global singletons: `GlobalPermissionManager`, `GlobalHookManager`, `GlobalMemoryManager`, `GlobalTodoManager`
+- Global singletons: `GlobalPermissionManager`, `GlobalHookManager`, `GlobalMemoryManager`, `GlobalTodoManager`, `GlobalTaskManager`, `GlobalBackgroundManager`, `GlobalCronScheduler`, `GlobalTeamManager`, `GlobalProtocolManager`, `GlobalAutonomyManager`, `GlobalWorktreeManager`, `GlobalMCPRouter`
 - Channel-based bridge for async TUI ↔ Agent communication
 - Chinese-language system prompts and error messages
 

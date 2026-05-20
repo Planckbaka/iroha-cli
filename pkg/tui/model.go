@@ -8,7 +8,8 @@ import (
 	"go-claude/pkg/agent"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"google.golang.org/adk/session"
@@ -45,7 +46,11 @@ type ProgramRef struct {
 // Model is the main TUI model
 type Model struct {
 	State              TuiState
-	TextInput          textinput.Model
+	TextArea           textarea.Model
+	Viewport           viewport.Model
+	Width              int
+	Height             int
+	Ready              bool
 	Spinner            spinner.Model
 	HistoryManager     *HistoryManager
 	History            []string
@@ -64,6 +69,20 @@ type Model struct {
 	OnDone  func()
 }
 
+func SetupTextArea() textarea.Model {
+	ta := textarea.New()
+	ta.Placeholder = "Send a message... (Enter to send, Shift+Down for new line)"
+	ta.Focus()
+	ta.Prompt = "┃ "
+	ta.CharLimit = 0
+	ta.SetWidth(100)
+	ta.SetHeight(2)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.ShowLineNumbers = false
+	ta.KeyMap.InsertNewline.SetKeys("shift+down")
+	return ta
+}
+
 func NewModel(runner *agent.CustomRunner) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -72,9 +91,14 @@ func NewModel(runner *agent.CustomRunner) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	pref := &ProgramRef{}
 
+	ta := SetupTextArea()
+	vp := viewport.New(100, 20)
+	vp.SetContent("Welcome to go-claude.")
+
 	m := Model{
 		State:          statePrompt,
-		TextInput:      SetupTextInput(),
+		TextArea:       ta,
+		Viewport:       vp,
 		Spinner:        s,
 		HistoryManager: NewHistoryManager(),
 		History:        make([]string, 0),
@@ -85,7 +109,7 @@ func NewModel(runner *agent.CustomRunner) Model {
 	}
 
 	m.OnEvent = func(ev *session.Event) {
-		if pref.P != nil && ev.LLMResponse.Content != nil {
+		if pref.P != nil && ev != nil && ev.LLMResponse.Content != nil {
 			for _, part := range ev.LLMResponse.Content.Parts {
 				if part.Text != "" {
 					pref.P.Send(StreamTextMsg{Text: part.Text})
@@ -109,7 +133,7 @@ func NewModel(runner *agent.CustomRunner) Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		textinput.Blink,
+		textarea.Blink,
 		m.Spinner.Tick,
 		m.listenToConfirmationBridge(), // Listen for sensitive tool auth calls
 	)
@@ -127,6 +151,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.Width = msg.Width
+		m.Height = msg.Height
+
+		m.TextArea.SetWidth(msg.Width)
+		m.Viewport.Width = msg.Width
+		m.Viewport.Height = msg.Height - m.TextArea.Height() - 2
+
+		if !m.Ready {
+			m.Ready = true
+			m.Viewport.SetContent(m.renderViewportContent())
+		}
+
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC:
@@ -141,7 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyEnter:
 			if m.State == statePrompt {
-				inputVal := strings.TrimSpace(m.TextInput.Value())
+				inputVal := strings.TrimSpace(m.TextArea.Value())
 				if inputVal == "" {
 					return m, nil
 				}
@@ -181,7 +220,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 						m.History = append(m.History, userLog, replyLog)
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 
@@ -212,7 +252,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 
 						m.History = append(m.History, userLog, sb.String())
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 
@@ -229,7 +270,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								replyLog += "\n" + StyleKeyHelp.Render("已加载配置文件: "+strings.Join(sources, ", "))
 							}
 							m.History = append(m.History, userLog, replyLog)
-							m.TextInput.SetValue("")
+							m.TextArea.SetValue("")
+							m.TextArea.SetHeight(2)
 							return m, nil
 						}
 
@@ -273,7 +315,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 输入 /hooks reload 可热重载配置文件"))
 
 						m.History = append(m.History, userLog, sb.String())
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 
@@ -324,7 +367,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 对话中说「记住…」让 Agent 调用 memory_save | 说「你记得什么」让它调用 memory_list"))
 
 						m.History = append(m.History, userLog, sb.String())
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 
@@ -343,7 +387,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						sb.WriteString("  " + StyleKeyHelp.Render(fmt.Sprintf("提示词字数统计: %d 字符", len(fullPrompt))))
 
 						m.History = append(m.History, userLog, sb.String())
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 
@@ -378,7 +423,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 输入 /prompt 可查看每个区块的完整内容"))
 
 						m.History = append(m.History, userLog, sb.String())
-						m.TextInput.SetValue("")
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
 						return m, nil
 					}
 				}
@@ -390,7 +436,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.CurrentPrompt = inputVal
 				m.StreamedText = ""
 				m.State = stateThinking
-				m.TextInput.SetValue("")
+				m.TextArea.SetValue("")
+				m.TextArea.SetHeight(2)
 
 				// Start background Agent Execution
 				ctx, cancel := context.WithCancel(context.Background())
@@ -407,13 +454,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyUp:
 			if m.State == statePrompt {
-				m.TextInput.SetValue(m.HistoryManager.Up())
+				m.TextArea.SetValue(m.HistoryManager.Up())
 				return m, nil
 			}
 
 		case tea.KeyDown:
 			if m.State == statePrompt {
-				m.TextInput.SetValue(m.HistoryManager.Down())
+				m.TextArea.SetValue(m.HistoryManager.Down())
 				return m, nil
 			}
 		}
@@ -441,11 +488,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamTextMsg:
 		m.State = stateStreaming
 		m.StreamedText += msg.Text
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
 		return m, nil
 
 	case ConfirmationRequiredMsg:
 		m.State = stateConfirming
 		m.ConfirmationPrompt = msg.Prompt
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
 		return m, nil
 
 	case AgentErrorMsg:
@@ -459,12 +510,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		m.Spinner, cmd = m.Spinner.Update(msg)
+		if m.State == stateThinking {
+			m.Viewport.SetContent(m.renderViewportContent())
+		}
 		return m, cmd
 	}
 
-	// Update text input only in prompt state
+	// Handle viewport update
+	var vpCmd tea.Cmd
+	m.Viewport, vpCmd = m.Viewport.Update(msg)
+	cmd = tea.Batch(cmd, vpCmd)
+
+	// Update text area only in prompt state
 	if m.State == statePrompt {
-		m.TextInput, cmd = m.TextInput.Update(msg)
+		m.TextArea, cmd = m.TextArea.Update(msg)
 		return m, cmd
 	}
 
@@ -473,56 +532,74 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) finalizeTurn() {
 	m.State = statePrompt
-	// Append current turn to static scrollback history in clean shell style
-	userLog := StyleUserMsg.Render("> " + m.CurrentPrompt)
-	
+	userLog := StyleUserMsg.Render("👤  " + m.CurrentPrompt)
+
 	var agentLog string
 	if m.LastError != nil {
-		agentLog = RenderErrorCard(m.LastError)
+		agentLog = StyleAgentMsg.Render("🤖  \n" + RenderErrorCard(m.LastError))
 		m.LastError = nil // Reset
 	} else {
-		agentLog = RenderMarkdown(m.StreamedText)
+		agentLog = StyleAgentMsg.Render("🤖  \n" + RenderMarkdown(m.StreamedText))
 	}
-	
+
 	m.History = append(m.History, userLog, agentLog)
-	m.TextInput.Focus()
+	m.TextArea.Focus()
+	m.Viewport.SetContent(m.renderViewportContent())
+	m.Viewport.GotoBottom()
 }
 
-func (m Model) View() string {
+func (m *Model) renderViewportContent() string {
 	var sb strings.Builder
 
-	// Render fixed premium header card / Todo Dashboard if there are active todo items
 	todoRender := RenderTodoDashboard()
 	if todoRender != "" {
 		sb.WriteString(todoRender)
 		sb.WriteString("\n")
 	}
 
-	// 1. Render static scrollback history
+	taskRender := RenderTaskDashboard()
+	if taskRender != "" {
+		sb.WriteString(taskRender)
+		sb.WriteString("\n")
+	}
+
 	if len(m.History) > 0 {
 		sb.WriteString(strings.Join(m.History, "\n"))
 		sb.WriteString("\n")
 	} else if m.State == statePrompt {
-		// Render premium welcome screen on first sight
 		sb.WriteString(RenderWelcomeCard(m.Runner))
 		sb.WriteString("\n")
 	}
 
-	// 2. Render current active state
 	switch m.State {
-	case statePrompt:
-		sb.WriteString(StylePrompt.Render("go-claude > ") + m.TextInput.View())
-
 	case stateThinking:
-		sb.WriteString(m.Spinner.View() + StyleThinking.Render(" Thinking..."))
-
+		sb.WriteString("\n" + StyleAgentMsg.Render("🤖  "+m.Spinner.View()+StyleThinking.Render(" Thinking...")))
 	case stateStreaming:
-		sb.WriteString(RenderMarkdown(m.StreamedText))
-
+		sb.WriteString("\n" + StyleAgentMsg.Render("🤖  \n"+RenderMarkdown(m.StreamedText)))
 	case stateConfirming:
-		sb.WriteString(RenderMarkdown(m.StreamedText) + "\n")
-		sb.WriteString(RenderConfirmCard(m.ConfirmationPrompt))
+		sb.WriteString("\n" + StyleAgentMsg.Render("🤖  \n"+RenderMarkdown(m.StreamedText)+"\n"+RenderConfirmCard(m.ConfirmationPrompt)))
 	}
+
+	return sb.String()
+}
+
+func (m Model) View() string {
+	if !m.Ready {
+		return "\n  Initializing..."
+	}
+
+	var sb strings.Builder
+
+	// Viewport taking up top space
+	sb.WriteString(m.Viewport.View())
+	sb.WriteString("\n")
+
+	// Separator line
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Render(strings.Repeat("─", m.Width)))
+	sb.WriteString("\n")
+
+	// TextArea taking up bottom space
+	sb.WriteString(m.TextArea.View())
 
 	return sb.String()
 }

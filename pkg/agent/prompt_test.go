@@ -152,3 +152,54 @@ func TestPromptBuilderSkills(t *testing.T) {
 		t.Errorf("expected prompt to contain custom skill, got: %s", prompt)
 	}
 }
+
+func TestPromptBuilderTeammatesAndWorktrees(t *testing.T) {
+	// 1. Setup mock teammate
+	_, err := GlobalTeamManager.RegisterTeammate("PromptSpecialist", "Reviewing prompts", "Custom sys prompt")
+	if err != nil {
+		t.Fatalf("failed to register teammate: %v", err)
+	}
+	defer func() {
+		// Clean up teammate config
+		configPath := filepath.Join(GlobalTeamManager.teamDir, "config.json")
+		os.Remove(configPath)
+	}()
+
+	// 2. Setup mock worktree
+	GlobalWorktreeManager.entries["TestWT"] = &WorktreeEntry{
+		Name:   "TestWT",
+		Branch: "wt/TestWT",
+		TaskID: "task-999",
+		Status: "active",
+		Path:   "/path/to/TestWT",
+	}
+	defer delete(GlobalWorktreeManager.entries, "TestWT")
+
+	builder := NewSystemPromptBuilder()
+
+	// 3. Test prompt with compressed message count (< 3)
+	origCount := GlobalMessageCount
+	defer func() { GlobalMessageCount = origCount }()
+
+	GlobalMessageCount = 2
+	promptComp := builder.Build()
+	if !strings.Contains(promptComp, "<identity>") {
+		t.Errorf("expected identity tags in prompt under message compression, got: %s", promptComp)
+	}
+
+	GlobalMessageCount = 5
+	promptNormal := builder.Build()
+	if strings.Contains(promptNormal, "<identity>") {
+		t.Errorf("did not expect identity tags in prompt under normal message count, got: %s", promptNormal)
+	}
+
+	// 4. Test teammate roster injection
+	if !strings.Contains(promptNormal, "PromptSpecialist") || !strings.Contains(promptNormal, "Reviewing prompts") {
+		t.Errorf("expected prompt to contain teammate info, got: %s", promptNormal)
+	}
+
+	// 5. Test worktree branch injection
+	if !strings.Contains(promptNormal, "TestWT") || !strings.Contains(promptNormal, "wt/TestWT") {
+		t.Errorf("expected prompt to contain worktree info, got: %s", promptNormal)
+	}
+}

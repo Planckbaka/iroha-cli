@@ -208,13 +208,8 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 
 func containsAny(s string, keywords []string) bool {
 	for _, k := range keywords {
-		if len(s) >= len(k) {
-			// Basic substring check
-			for i := 0; i <= len(s)-len(k); i++ {
-				if s[i:i+len(k)] == k {
-					return true
-				}
-			}
+		if strings.Contains(s, k) {
+			return true
 		}
 	}
 	return false

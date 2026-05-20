@@ -10,7 +10,7 @@ Terminal UI built with Bubble Tea: prompt input, streaming output rendering, hum
 | File | Description |
 |------|-------------|
 | `model.go` | `Model` — Bubble Tea model with states (prompt/thinking/streaming/confirming), slash command handling, async agent event routing |
-| `view.go` | `RenderMarkdown`, `RenderConfirmCard`, `RenderWelcomeCard`, `RenderTodoDashboard` — view rendering functions |
+| `view.go` | `RenderMarkdown`, `RenderConfirmCard`, `RenderWelcomeCard`, `RenderErrorCard`, `RenderTodoDashboard`, `RenderTaskDashboard`, `RenderTaskDetails`, `RenderTeamDashboard`, `RenderWorktreeDashboard`, `RenderMCPDashboard` — view rendering functions |
 | `styles.go` | Lipgloss color palette (Emerald/Amber/Coral theme) and style definitions |
 | `input.go` | `HistoryManager` (Up/Down arrow navigation), `SetupTextInput` — prompt input initialization |
 
@@ -35,7 +35,7 @@ Terminal UI built with Bubble Tea: prompt input, streaming output rendering, hum
 ## Dependencies
 
 ### Internal
-- `pkg/agent` — `CustomRunner`, `Bridge`, `GlobalPermissionManager`, `GlobalHookManager`, `GlobalMemoryManager`, `GlobalTodoManager`
+- `pkg/agent` — `CustomRunner`, `Bridge`, `GlobalPermissionManager`, `GlobalHookManager`, `GlobalMemoryManager`, `GlobalTodoManager`, `GlobalTaskManager`, `GlobalTeamManager`, `GlobalWorktreeManager`, `GlobalMCPRouter`
 
 ### External
 - `github.com/charmbracelet/bubbletea` — Elm-architecture TUI framework

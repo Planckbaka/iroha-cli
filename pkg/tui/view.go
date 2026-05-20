@@ -57,13 +57,150 @@ func RenderTodoDashboard() string {
 	}
 
 	headerStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
 		Padding(0, 1).
 		MarginTop(1).
 		MarginBottom(1)
 
 	return headerStyle.Render("📋  go-claude 任务规划进度面板\n\n"+todoRender) + "\n"
+}
+
+// RenderTaskDashboard renders a premium dashboard box wrapping the task graph status
+func RenderTaskDashboard() string {
+	tasks, err := agent.GlobalTaskManager.ListTasks()
+	if err != nil || len(tasks) == 0 {
+		return ""
+	}
+
+	var completed, inProgress, ready, blocked []string
+
+	badgeCompleted := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("✓")
+	badgeInProgress := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("❯")
+	badgeReady := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("•")
+	badgeBlocked := lipgloss.NewStyle().Foreground(ColorTextMuted).Bold(true).Render("⬡")
+
+	for _, t := range tasks {
+		ownerBadge := lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(fmt.Sprintf("@%s", t.Owner))
+		
+		var line string
+		if t.Status == "completed" {
+			line = fmt.Sprintf("  %s %s %s", badgeCompleted, StylePrompt.Render(t.ID), ownerBadge)
+			completed = append(completed, line)
+		} else if t.Status == "in_progress" {
+			line = fmt.Sprintf("  %s %s %s", badgeInProgress, StylePrompt.Render(t.ID), ownerBadge)
+			inProgress = append(inProgress, line)
+		} else if len(t.BlockedBy) == 0 {
+			line = fmt.Sprintf("  %s %s %s", badgeReady, StylePrompt.Render(t.ID), ownerBadge)
+			ready = append(ready, line)
+		} else {
+			depStyle := lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(fmt.Sprintf("(need: %s)", strings.Join(t.BlockedBy, ", ")))
+			line = fmt.Sprintf("  %s %s %s %s", badgeBlocked, StylePrompt.Render(t.ID), ownerBadge, depStyle)
+			blocked = append(blocked, line)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊 " + StyleKeyActive.Render("持久化任务图 (Durable Work Graph)") + "\n")
+	
+	var items []string
+	if len(inProgress) > 0 {
+		items = append(items, strings.Join(inProgress, "  "))
+	}
+	if len(ready) > 0 {
+		items = append(items, strings.Join(ready, "  "))
+	}
+	if len(blocked) > 0 {
+		items = append(items, strings.Join(blocked, "  "))
+	}
+	if len(completed) > 0 {
+		items = append(items, strings.Join(completed, "  "))
+	}
+	
+	sb.WriteString(strings.Join(items, "\n") + "\n")
+
+	var total = len(tasks)
+	var done = len(completed)
+	progressPct := 0
+	if total > 0 {
+		progressPct = (done * 100) / total
+	}
+	sb.WriteString(fmt.Sprintf("\n  进度: \x1b[32m%d%%\x1b[0m (%d/%d 完成)", progressPct, done, total))
+
+	cardStyle := lipgloss.NewStyle().
+		Padding(0, 1).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
+}
+
+// RenderTaskDetails renders the full detailed task graph panel for /task command
+func RenderTaskDetails() string {
+	tasks, err := agent.GlobalTaskManager.ListTasks()
+	if err != nil || len(tasks) == 0 {
+		return ""
+	}
+
+	var completed, inProgress, ready, blocked []string
+
+	badgeCompleted := lipgloss.NewStyle().Background(ColorSuccess).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).Bold(true).Render("COMPLETED")
+	badgeInProgress := lipgloss.NewStyle().Background(ColorWarning).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).Bold(true).Render("IN PROGRESS")
+	badgeReady := lipgloss.NewStyle().Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).Bold(true).Render("READY")
+	badgeBlocked := lipgloss.NewStyle().Background(ColorTextMuted).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).Bold(true).Render("BLOCKED")
+
+	for _, t := range tasks {
+		ownerBadge := lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(fmt.Sprintf("@%s", t.Owner))
+		
+		var line string
+		if t.Status == "completed" {
+			line = fmt.Sprintf("  %-10s %s %s", StylePrompt.Render(t.ID), t.Subject, ownerBadge)
+			completed = append(completed, line)
+		} else if t.Status == "in_progress" {
+			line = fmt.Sprintf("  %-10s %s %s", StylePrompt.Render(t.ID), t.Subject, ownerBadge)
+			inProgress = append(inProgress, line)
+		} else if len(t.BlockedBy) == 0 {
+			line = fmt.Sprintf("  %-10s %s %s", StylePrompt.Render(t.ID), t.Subject, ownerBadge)
+			ready = append(ready, line)
+		} else {
+			depStyle := lipgloss.NewStyle().Foreground(ColorDanger).Italic(true).Render(fmt.Sprintf("need: %s", strings.Join(t.BlockedBy, ", ")))
+			line = fmt.Sprintf("  %-10s %s %s  %s", StylePrompt.Render(t.ID), t.Subject, ownerBadge, depStyle)
+			blocked = append(blocked, line)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊  " + StyleKeyActive.Render("Durable Work Graph Details (任务图详细列表)") + "\n\n")
+
+	if len(inProgress) > 0 {
+		sb.WriteString(fmt.Sprintf("  %s\n", badgeInProgress))
+		sb.WriteString(strings.Join(inProgress, "\n") + "\n\n")
+	}
+	if len(ready) > 0 {
+		sb.WriteString(fmt.Sprintf("  %s\n", badgeReady))
+		sb.WriteString(strings.Join(ready, "\n") + "\n\n")
+	}
+	if len(blocked) > 0 {
+		sb.WriteString(fmt.Sprintf("  %s\n", badgeBlocked))
+		sb.WriteString(strings.Join(blocked, "\n") + "\n\n")
+	}
+	if len(completed) > 0 {
+		sb.WriteString(fmt.Sprintf("  %s\n", badgeCompleted))
+		sb.WriteString(strings.Join(completed, "\n") + "\n\n")
+	}
+
+	var total = len(tasks)
+	var done = len(completed)
+	progressPct := 0
+	if total > 0 {
+		progressPct = (done * 100) / total
+	}
+	sb.WriteString(fmt.Sprintf("  进度: \x1b[32m%d%%\x1b[0m (%d/%d 完成)", progressPct, done, total))
+
+	cardStyle := lipgloss.NewStyle().
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
 }
 
 // RenderErrorCard renders a premium aesthetic error card wrapping unrecoverable execution errors
@@ -106,11 +243,137 @@ func RenderErrorCard(err error) string {
 
 	// Wrap in a gorgeous red-border card style
 	cardStyle := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorDanger).
 		Padding(1, 2).
 		MarginTop(1).
 		MarginBottom(1)
 
 	return cardStyle.Render(sb.String())
+}
+
+// RenderTeamDashboard renders a premium dashboard card wrapping the teammate roster and mailboxes
+func RenderTeamDashboard() string {
+	teammates, err := agent.GlobalTeamManager.ListTeammates()
+	if err != nil {
+		return StyleToolError.Render(fmt.Sprintf("❌ 获取队友列表失败: %v", err))
+	}
+
+	var sb strings.Builder
+	sb.WriteString("👥  " + StyleKeyActive.Render("智能体协作团队 (Agent Teams)") + "\n\n")
+
+	if len(teammates) == 0 {
+		sb.WriteString("  " + StyleKeyHelp.Render("当前没有已注册的团队成员。") + "\n")
+		sb.WriteString("  " + StyleKeyHelp.Render("您可以使用 `spawn_teammate` 工具注册新的队友。") + "\n")
+	} else {
+		for _, t := range teammates {
+			statusSymbol := lipgloss.NewStyle().Foreground(ColorTextMuted).Render("⬡ offline")
+			if t.Status == "working" {
+				statusSymbol = lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("❯ working")
+			} else if t.Status == "idle" {
+				statusSymbol = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("✓ idle")
+			}
+
+			sb.WriteString(fmt.Sprintf("  • %s (%s) - %s (活跃于 %s)\n",
+				StylePrompt.Render(t.Name),
+				lipgloss.NewStyle().Foreground(ColorSecondary).Render(t.Role),
+				statusSymbol,
+				t.LastActive.Format("15:04:05"),
+			))
+		}
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
+}
+
+// RenderWorktreeDashboard renders a premium dashboard card wrapping git worktrees isolation index
+func RenderWorktreeDashboard() string {
+	worktrees, err := agent.GlobalWorktreeManager.List()
+	if err != nil {
+		return StyleToolError.Render(fmt.Sprintf("❌ 获取 Worktree 列表失败: %v", err))
+	}
+
+	var sb strings.Builder
+	sb.WriteString("🌴  " + StyleKeyActive.Render("并发沙箱分支隔离 (Git Worktree Isolation)") + "\n\n")
+
+	if len(worktrees) == 0 {
+		sb.WriteString("  " + StyleKeyHelp.Render("当前没有已注册的隔离分支沙箱。") + "\n")
+		sb.WriteString("  " + StyleKeyHelp.Render("当队友被派发独立 Task 时，系统会自动为其创建并发沙箱。") + "\n")
+	} else {
+		for _, w := range worktrees {
+			statusSymbol := lipgloss.NewStyle().Foreground(ColorTextMuted).Render("removed")
+			if w.Status == "active" {
+				statusSymbol = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("active")
+			} else if w.Status == "kept" {
+				statusSymbol = lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("kept")
+			}
+
+			taskInfo := ""
+			if w.TaskID != "" {
+				taskInfo = lipgloss.NewStyle().Foreground(ColorSecondary).Render(fmt.Sprintf(" [Task: %s]", w.TaskID))
+			}
+
+			sb.WriteString(fmt.Sprintf("  • %s (分支: %s)%s - %s\n",
+				StylePrompt.Render(w.Name),
+				lipgloss.NewStyle().Foreground(ColorSecondary).Render(w.Branch),
+				taskInfo,
+				statusSymbol,
+			))
+			sb.WriteString(fmt.Sprintf("    路径: %s\n", StyleKeyHelp.Render(w.Path)))
+		}
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
+}
+
+// RenderMCPDashboard renders a premium dashboard card wrapping connected plugin servers
+func RenderMCPDashboard() string {
+	servers := agent.GlobalMCPRouter.ListServers()
+
+	var sb strings.Builder
+	sb.WriteString("🔌  " + StyleKeyActive.Render("模型能力总线插件 (MCP Server Plugin Roster)") + "\n\n")
+
+	if len(servers) == 0 {
+		sb.WriteString("  " + StyleKeyHelp.Render("当前没有活跃的 MCP Plugin 服务器。") + "\n")
+		sb.WriteString("  " + StyleKeyHelp.Render("您可以在 `.go-claude/plugins.json` 配置外部 JSON-RPC 工具。") + "\n")
+	} else {
+		for name, status := range servers {
+			statusSymbol := lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("disconnected")
+			if status == "connected" {
+				statusSymbol = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("connected")
+			}
+
+			sb.WriteString(fmt.Sprintf("  • %s - status: %s\n",
+				StylePrompt.Render(name),
+				statusSymbol,
+			))
+		}
+
+		// Also discover and display tools if connected
+		tools, err := agent.GlobalMCPRouter.DiscoverTools()
+		if err == nil && len(tools) > 0 {
+			sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("动态注册工具 (MCP Injected Tools):") + "\n")
+			for _, t := range tools {
+				sb.WriteString(fmt.Sprintf("    - %s: %s\n",
+					lipgloss.NewStyle().Foreground(ColorSuccess).Render(t.Name()),
+					StyleKeyHelp.Render(t.Description()),
+				))
+			}
+		}
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
 }

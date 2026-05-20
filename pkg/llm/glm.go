@@ -491,6 +491,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 		reader := bufio.NewReader(resp.Body)
 		var currentToolName string
 		var currentToolArgs strings.Builder
+		var sentFinal bool
 
 		for {
 			line, err := reader.ReadString('\n')
@@ -514,7 +515,6 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 
 			var chunk glmStreamResponse
 			if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
-				// Ignore unparseable lines safely
 				continue
 			}
 
@@ -535,8 +535,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					currentToolArgs.WriteString(tc.Function.Arguments)
 				}
 
-				if choice.FinishReason == "tool_calls" || choice.FinishReason == "stop" {
-					// Finalize tool call chunk
+				if choice.FinishReason != "" {
 					var parsedArgs map[string]any
 					_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
 
@@ -555,6 +554,13 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 						Partial:      false,
 						TurnComplete: false,
 					}, nil)
+
+					currentToolName = ""
+					currentToolArgs.Reset()
+
+					if choice.FinishReason != "tool_calls" {
+						sentFinal = true
+					}
 				}
 				continue
 			}
@@ -573,7 +579,8 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 				}, nil)
 			}
 
-			if choice.FinishReason == "stop" {
+			// Any non-empty finish reason signals the model is done
+			if choice.FinishReason != "" {
 				yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
@@ -584,8 +591,25 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					Partial:      false,
 					TurnComplete: true,
 				}, nil)
+				sentFinal = true
 				break
 			}
+		}
+
+		// Guarantee a final response is always sent — prevents ADK
+		// "TODO: last event is not final" error when the stream ends
+		// without a proper finish_reason (e.g. network timeout, "length").
+		if !sentFinal {
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{Text: ""},
+					},
+				},
+				Partial:      false,
+				TurnComplete: true,
+			}, nil)
 		}
 	}
 }

@@ -129,7 +129,7 @@ func main() {
 	m := tui.NewModel(runner)
 
 	// 6. Create the Bubble Tea Program
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Inject the program reference back into the model via ProgramRef pointer
 	m.ProgramRef.P = p

@@ -4,14 +4,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Minimalist Aesthetic Color Palette (Claude-Style Theme)
+// Modern Dark / Aubergine Color Palette (Claude Code Theme)
 var (
-	ColorPrimary   = lipgloss.Color("#10B981") // Emerald Green
-	ColorSecondary = lipgloss.Color("#9CA3AF") // Slate Gray
-	ColorSuccess   = lipgloss.Color("#10B981") // Emerald Green
-	ColorWarning   = lipgloss.Color("#F59E0B") // Amber Yellow
-	ColorDanger    = lipgloss.Color("#EF4444") // Coral Red
-	ColorTextMuted = lipgloss.Color("#6B7280") // Cool Gray
+	ColorPrimary   = lipgloss.Color("#C084FC") // Purple/Aubergine Accent
+	ColorSecondary = lipgloss.Color("#A1A1AA") // Zinc/Slate
+	ColorSuccess   = lipgloss.Color("#10B981") // Emerald
+	ColorWarning   = lipgloss.Color("#F59E0B") // Amber
+	ColorDanger    = lipgloss.Color("#F43F5E") // Rose Red
+	ColorTextMuted = lipgloss.Color("#71717A") // Zinc Muted
 )
 
 // Lipgloss Styles
@@ -22,39 +22,44 @@ var (
 
 	StyleWelcome = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
-			Padding(0, 0).
+			Padding(1, 2).
 			MarginTop(1).
 			MarginBottom(1)
 
 	StyleUserMsg = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E2E8F0")).
+			Foreground(lipgloss.Color("#F4F4F5")).
 			Bold(true).
-			MarginLeft(0).
+			MarginLeft(1).
+			MarginTop(1)
+
+	StyleAgentMsg = lipgloss.NewStyle().
+			MarginLeft(1).
 			MarginTop(1)
 
 	StyleAgentHeader = lipgloss.NewStyle().
 				Foreground(ColorPrimary).
 				Bold(true).
-				MarginTop(1)
+				MarginTop(1).
+				MarginLeft(1)
 
 	StyleToolHeader = lipgloss.NewStyle().
 			Foreground(ColorWarning).
 			Bold(true).
-			MarginLeft(0).
+			MarginLeft(1).
 			MarginTop(1)
 
 	StyleToolSuccess = lipgloss.NewStyle().
 				Foreground(ColorSuccess).
 				Bold(true).
-				MarginLeft(0)
+				MarginLeft(1)
 
 	StyleToolError = lipgloss.NewStyle().
 			Foreground(ColorDanger).
 			Bold(true).
-			MarginLeft(0)
+			MarginLeft(1)
 
 	StyleThinking = lipgloss.NewStyle().
-			Foreground(ColorWarning).
+			Foreground(ColorPrimary). // Purple spinner looks premium
 			Italic(true)
 
 	StyleConfirmCard = lipgloss.NewStyle().
@@ -70,3 +75,4 @@ var (
 			Foreground(ColorPrimary).
 			Bold(true)
 )
+

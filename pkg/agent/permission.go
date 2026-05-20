@@ -74,9 +74,43 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 		rules: []PermissionRule{
 			{Tool: "shell_run", Content: "rm -rf /", Behavior: "deny"},
 			{Tool: "shell_run", Content: "sudo *", Behavior: "deny"},
+			{Tool: "background_run", Content: "rm -rf /", Behavior: "deny"},
+			{Tool: "background_run", Content: "sudo *", Behavior: "deny"},
 			{Tool: "file_read", Path: "*", Behavior: "allow"},
 			{Tool: "search_grep", Behavior: "allow"},
 			{Tool: "todo", Behavior: "allow"},
+			{Tool: "task_create", Behavior: "allow"},
+			{Tool: "task_update", Behavior: "allow"},
+			{Tool: "task_list", Behavior: "allow"},
+			{Tool: "task_get", Behavior: "allow"},
+			{Tool: "background_run", Behavior: "allow"},
+			{Tool: "check_background", Behavior: "allow"},
+			{Tool: "schedule_create", Behavior: "allow"},
+			{Tool: "schedule_list", Behavior: "allow"},
+			{Tool: "schedule_delete", Behavior: "allow"},
+			// s15: Teams
+			{Tool: "spawn_teammate", Behavior: "allow"},
+			{Tool: "list_teammates", Behavior: "allow"},
+			{Tool: "send_message", Behavior: "allow"},
+			{Tool: "read_inbox", Behavior: "allow"},
+			{Tool: "broadcast", Behavior: "allow"},
+			// s16: Protocols
+			{Tool: "protocol_shutdown_request", Behavior: "allow"},
+			{Tool: "protocol_shutdown_response", Behavior: "allow"},
+			{Tool: "protocol_plan_approval_request", Behavior: "allow"},
+			{Tool: "protocol_plan_approval_response", Behavior: "allow"},
+			// s17: Autonomy
+			{Tool: "agent_claim_task", Behavior: "allow"},
+			{Tool: "agent_set_state", Behavior: "allow"},
+			// s18: Worktrees
+			{Tool: "worktree_create", Behavior: "allow"},
+			{Tool: "worktree_list", Behavior: "allow"},
+			{Tool: "worktree_status", Behavior: "allow"},
+			{Tool: "worktree_enter", Behavior: "allow"},
+			{Tool: "worktree_closeout", Behavior: "allow"},
+			// s19: MCP & Plugin
+			{Tool: "mcp_server_list", Behavior: "allow"},
+			{Tool: "mcp__*", Behavior: "allow"},
 		},
 	}
 }
@@ -118,11 +152,13 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 	defer pm.mu.Unlock()
 
 	// Step 0: Bash security validation (for bash command writes)
-	if toolName == "shell_run" {
+	if toolName == "shell_run" || toolName == "background_run" {
 		cmdStr := ""
 		if m, ok := args.(map[string]any); ok {
 			cmdStr, _ = m["command"].(string)
 		} else if m, ok := args.(ShellRunArgs); ok {
+			cmdStr = m.Command
+		} else if m, ok := args.(BackgroundRunArgs); ok {
 			cmdStr = m.Command
 		}
 		failures := pm.validator.Validate(cmdStr)
@@ -212,7 +248,7 @@ func (pm *PermissionManager) ResetConsecutiveDenials() {
 func (pm *PermissionManager) matches(rule PermissionRule, toolName string, args any) bool {
 	// 1. Tool name match
 	if rule.Tool != "*" && rule.Tool != "" {
-		if rule.Tool != toolName {
+		if !matchesPattern(rule.Tool, toolName) {
 			return false
 		}
 	}

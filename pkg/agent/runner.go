@@ -38,11 +38,13 @@ func init() {
 type ConfirmationBridge struct {
 	PromptChan   chan string // Agent sends confirmation prompts here
 	ResponseChan chan string // TUI sends user responses (y/n/always) here
+	CancelChan   chan struct{}
 }
 
 var Bridge = &ConfirmationBridge{
 	PromptChan:   make(chan string, 1),
 	ResponseChan: make(chan string, 1),
+	CancelChan:   make(chan struct{}),
 }
 
 // CustomRunner wraps ADK runner and manages background execution
@@ -111,6 +113,9 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	// 7. Fire SessionStart hooks — runs external scripts once at startup
 	GlobalHookManager.RunHooks(HookSessionStart, HookContext{})
 
+	// Start background CronScheduler
+	GlobalCronScheduler.Start()
+
 	return &CustomRunner{
 		adkRunner: adkRunner,
 		llmModel:  modelAdapter,
@@ -127,7 +132,50 @@ func (cr *CustomRunner) ModelName() string {
 // Execute handles running a prompt asynchronously and piping events to a callback
 func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt string, onEvent func(*session.Event), onError func(error), onDone func()) {
 	GlobalToolCircuitBreaker.Reset()
+
+	// Reset the cancel channel for this execution turn
+	Bridge.CancelChan = make(chan struct{})
 	go func() {
+		<-ctx.Done()
+		close(Bridge.CancelChan)
+	}()
+
+	go func() {
+		// Drain background task notifications
+		bgNotifs := GlobalBackgroundManager.DrainNotifications()
+		// Drain cron scheduler notifications
+		cronNotifs := GlobalCronScheduler.DrainNotifications()
+
+		var sb strings.Builder
+		if len(bgNotifs) > 0 {
+			sb.WriteString("<background-results>\n")
+			for _, n := range bgNotifs {
+				sb.WriteString(fmt.Sprintf("  <task id=\"%s\" status=\"%s\" command=\"%s\">\n", n.TaskID, n.Status, n.Command))
+				sb.WriteString(fmt.Sprintf("    <preview>%s</preview>\n", n.Preview))
+				sb.WriteString(fmt.Sprintf("    <output_file>%s</output_file>\n", n.OutputFile))
+				sb.WriteString("  </task>\n")
+			}
+			sb.WriteString("</background-results>\n\n")
+		}
+
+		if len(cronNotifs) > 0 {
+			sb.WriteString("<scheduled-results>\n")
+			for _, n := range cronNotifs {
+				missedAttr := ""
+				if n.MissedAt != "" {
+					missedAttr = fmt.Sprintf(" missed_at=\"%s\"", n.MissedAt)
+				}
+				sb.WriteString(fmt.Sprintf("  <trigger id=\"%s\"%s>\n", n.ScheduleID, missedAttr))
+				sb.WriteString(fmt.Sprintf("    <prompt>%s</prompt>\n", n.Prompt))
+				sb.WriteString("  </trigger>\n")
+			}
+			sb.WriteString("</scheduled-results>\n\n")
+		}
+
+		if sb.Len() > 0 {
+			prompt = sb.String() + prompt
+		}
+
 		userMsg := &genai.Content{
 			Role: "user",
 			Parts: []*genai.Part{
@@ -230,11 +278,20 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		promptMsg = fmt.Sprintf("🔧 \x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   ⚠️  %s", b.Name(), args, reason)
 	}
 
-	// Send to TUI
-	Bridge.PromptChan <- promptMsg
+	// Send to TUI with cancellation support
+	select {
+	case Bridge.PromptChan <- promptMsg:
+	case <-Bridge.CancelChan:
+		return nil, fmt.Errorf("操作已被取消")
+	}
 
-	// Block on response
-	approved := <-Bridge.ResponseChan
+	// Block on response with cancellation support
+	var approved string
+	select {
+	case approved = <-Bridge.ResponseChan:
+	case <-Bridge.CancelChan:
+		return nil, fmt.Errorf("操作已被取消")
+	}
 
 	if approved == "always" {
 		// Dynamically add a temporary session allow rule

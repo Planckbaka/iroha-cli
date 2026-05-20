@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -133,7 +134,7 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 
 func containsAnyPath(path string, segments []string) bool {
 	for _, s := range segments {
-		if filepath.Base(path) == s || filepath.Join(path) == s {
+		if filepath.Base(path) == s || strings.Contains(path, string(filepath.Separator)+s+string(filepath.Separator)) {
 			return true
 		}
 	}
@@ -257,7 +258,254 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{readTool, writeTool, grepTool, shellTool, todoTool, memorySaveTool, memoryListTool}, nil
+	// 8. task_create
+	taskCreateTool, err := functiontool.New(functiontool.Config{
+		Name:        "task_create",
+		Description: "在持久化任务 DAG 图中创建一个新任务。新任务默认状态为 pending，默认负责人为 agent。",
+	}, TaskCreateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 9. task_update
+	taskUpdateTool, err := functiontool.New(functiontool.Config{
+		Name:        "task_update",
+		Description: "更新持久化任务 DAG 图中的现有任务。可以修改状态、前置依赖或后续依赖。任何依赖环（cycle）都会被 DFS 校验直接拒绝。",
+	}, TaskUpdateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 10. task_list
+	taskListTool, err := functiontool.New(functiontool.Config{
+		Name:        "task_list",
+		Description: "列出当前持久化任务 DAG 图中所有未删除的任务列表。",
+	}, TaskListHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 11. task_get
+	taskGetTool, err := functiontool.New(functiontool.Config{
+		Name:        "task_get",
+		Description: "根据任务 ID 获取特定任务的详细记录，包含前置/后续依赖与执行状态。",
+	}, TaskGetHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 12. background_run
+	bgRunTool, err := functiontool.New(functiontool.Config{
+		Name:        "background_run",
+		Description: "在后台子线程启动一条 Shell 命令执行。会立即返回任务 ID，大模型不需要在此等待。完成后结果将自动通过 drain_notifications 机制在下次交互时反馈给你。",
+	}, BackgroundRunHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 13. check_background
+	bgCheckTool, err := functiontool.New(functiontool.Config{
+		Name:        "check_background",
+		Description: "查询所有或特定后台任务的状态与缩略结果。若不传参数则列出全部后台任务的列表。",
+	}, CheckBackgroundHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 14. schedule_create
+	schCreateTool, err := functiontool.New(functiontool.Config{
+		Name:        "schedule_create",
+		Description: "创建一个新的定时调度任务（支持单次或循环定时，支持持久化）。当时间到达时，其指定的提示指令会自动被反馈给大模型执行。",
+	}, ScheduleCreateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 15. schedule_list
+	schListTool, err := functiontool.New(functiontool.Config{
+		Name:        "schedule_list",
+		Description: "列出当前所有活跃的定时调度任务（包含任务 ID、Cron 表达式、循环与持久化属性）。",
+	}, ScheduleListHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 16. schedule_delete
+	schDeleteTool, err := functiontool.New(functiontool.Config{
+		Name:        "schedule_delete",
+		Description: "根据任务 ID 删除一个现有的定时调度任务。",
+	}, ScheduleDeleteHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// s15 Team Tools
+	spawnTeammateTool, err := functiontool.New(functiontool.Config{
+		Name:        "spawn_teammate",
+		Description: "生成并在后台启动一个特工代理人角色。",
+	}, SpawnTeammateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	listTeammatesTool, err := functiontool.New(functiontool.Config{
+		Name:        "list_teammates",
+		Description: "列出当前团队中所有特工代理人的状态与角色。",
+	}, ListTeammatesHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	sendMessageTool, err := functiontool.New(functiontool.Config{
+		Name:        "send_message",
+		Description: "向指定接收者的信箱发送一条消息。",
+	}, SendMessageHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	readInboxTool, err := functiontool.New(functiontool.Config{
+		Name:        "read_inbox",
+		Description: "读取并清空某个特工的信箱，以拉取新消息。",
+	}, ReadInboxHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	broadcastTool, err := functiontool.New(functiontool.Config{
+		Name:        "broadcast",
+		Description: "广播消息给所有的团队成员。",
+	}, BroadcastHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// s16 Protocol Tools
+	protoShutdownReqTool, err := functiontool.New(functiontool.Config{
+		Name:        "protocol_shutdown_request",
+		Description: "发起一个正式的停机申请请求。",
+	}, ProtocolShutdownRequestHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	protoShutdownRespTool, err := functiontool.New(functiontool.Config{
+		Name:        "protocol_shutdown_response",
+		Description: "对正式的停机申请请求做出回应批准或拒绝。",
+	}, ProtocolShutdownResponseHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	protoPlanApprovalReqTool, err := functiontool.New(functiontool.Config{
+		Name:        "protocol_plan_approval_request",
+		Description: "发起一个重大的行动方案或重构计划审批请求。",
+	}, ProtocolPlanApprovalRequestHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	protoPlanApprovalRespTool, err := functiontool.New(functiontool.Config{
+		Name:        "protocol_plan_approval_response",
+		Description: "审批或拒绝其他的行动方案请求。",
+	}, ProtocolPlanApprovalResponseHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// s17 Autonomous Agent Tools
+	agentClaimTaskTool, err := functiontool.New(functiontool.Config{
+		Name:        "agent_claim_task",
+		Description: "让某个特工代理人根据关键字过滤匹配并认领所有 pending 且 unblocked 的任务。",
+	}, AgentClaimTaskHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	agentSetStateTool, err := functiontool.New(functiontool.Config{
+		Name:        "agent_set_state",
+		Description: "修改特工的状态，可选：WORK（专注工作模式）、IDLE（闲置轮询模式）。",
+	}, AgentSetStateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// s18 Worktree Tools
+	wtCreateTool, err := functiontool.New(functiontool.Config{
+		Name:        "worktree_create",
+		Description: "创建一个隔离的 Git worktree 分支，用于专职且安全地开发某个特定任务。",
+	}, WorktreeCreateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	wtListTool, err := functiontool.New(functiontool.Config{
+		Name:        "worktree_list",
+		Description: "列出当前所有的工作区隔离分支和目录。",
+	}, WorktreeListHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	wtStatusTool, err := functiontool.New(functiontool.Config{
+		Name:        "worktree_status",
+		Description: "查询特定隔离工作区的具体状态详情。",
+	}, WorktreeStatusHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	wtEnterTool, err := functiontool.New(functiontool.Config{
+		Name:        "worktree_enter",
+		Description: "记录进入或激活某个隔离工作区的访问记录。",
+	}, WorktreeEnterHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	wtCloseoutTool, err := functiontool.New(functiontool.Config{
+		Name:        "worktree_closeout",
+		Description: "收尾某个特定的隔离工作区分支，可以选择保留路径(keep)或强力移除(remove)。",
+	}, WorktreeCloseoutHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// s19 MCP Tool
+	mcpServerListTool, err := functiontool.New(functiontool.Config{
+		Name:        "mcp_server_list",
+		Description: "列出当前全部已连接 of 外部 MCP 插件服务器及其连接状态。",
+	}, MCPServerListHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	resTools := []tool.Tool{
+		readTool, writeTool, grepTool, shellTool, todoTool,
+		memorySaveTool, memoryListTool,
+		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
+		bgRunTool, bgCheckTool,
+		schCreateTool, schListTool, schDeleteTool,
+
+		// s15
+		spawnTeammateTool, listTeammatesTool, sendMessageTool, readInboxTool, broadcastTool,
+		// s16
+		protoShutdownReqTool, protoShutdownRespTool, protoPlanApprovalReqTool, protoPlanApprovalRespTool,
+		// s17
+		agentClaimTaskTool, agentSetStateTool,
+		// s18
+		wtCreateTool, wtListTool, wtStatusTool, wtEnterTool, wtCloseoutTool,
+		// s19
+		mcpServerListTool,
+	}
+
+	// s19 Dynamic MCP Tools
+	_ = GlobalMCPRouter.LoadAndStartPlugins()
+	if mcpTools, err := GlobalMCPRouter.DiscoverTools(); err == nil {
+		resTools = append(resTools, mcpTools...)
+	}
+
+	return resTools, nil
 }
 
 // ─── Memory tool handlers ─────────────────────────────────────────────────
@@ -311,4 +559,521 @@ func MemoryListHandler(_ tool.Context, _ MemoryListArgs) (MemoryListResult, erro
 		}
 	}
 	return out, nil
+}
+
+// ─── Task tool definitions ──────────────────────────────────────────────────
+
+// TaskCreateArgs represents arguments for task_create tool.
+type TaskCreateArgs struct {
+	ID          string   `json:"id" description:"任务唯一标识，如 t1, task-setup"`
+	Subject     string   `json:"subject" description:"任务主题/简短摘要"`
+	Description string   `json:"description,omitempty" description:"任务详细描述"`
+	Status      string   `json:"status,omitempty" description:"任务状态，默认为 pending，可选：pending, in_progress, completed"`
+	BlockedBy   []string `json:"blockedBy,omitempty" description:"依赖的前置任务 ID 列表"`
+	Blocks      []string `json:"blocks,omitempty" description:"该任务阻塞的后续任务 ID 列表"`
+	Owner       string   `json:"owner,omitempty" description:"任务负责人，默认为 agent，可选：agent, user"`
+}
+
+type TaskCreateResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func TaskCreateHandler(ctx tool.Context, args TaskCreateArgs) (TaskCreateResult, error) {
+	status := args.Status
+	if status == "" {
+		status = "pending"
+	}
+	owner := args.Owner
+	if owner == "" {
+		owner = "agent"
+	}
+	task := &TaskRecord{
+		ID:          args.ID,
+		Subject:     args.Subject,
+		Description: args.Description,
+		Status:      status,
+		BlockedBy:   args.BlockedBy,
+		Blocks:      args.Blocks,
+		Owner:       owner,
+	}
+	if err := GlobalTaskManager.SaveTask(task); err != nil {
+		return TaskCreateResult{Success: false, Message: err.Error()}, WrapToolError("task_create", args, err)
+	}
+	return TaskCreateResult{Success: true, Message: fmt.Sprintf("✅ 任务已创建: %s", task.ID)}, nil
+}
+
+// TaskUpdateArgs represents arguments for task_update tool.
+type TaskUpdateArgs struct {
+	ID          string   `json:"id" description:"要更新的任务唯一标识"`
+	Subject     string   `json:"subject,omitempty" description:"新的任务主题"`
+	Description string   `json:"description,omitempty" description:"新的任务描述"`
+	Status      string   `json:"status,omitempty" description:"新的任务状态，可选：pending, in_progress, completed, deleted"`
+	BlockedBy   []string `json:"blockedBy,omitempty" description:"新的前置依赖任务 ID 列表（若传入，则完全覆盖原有列表）"`
+	Blocks      []string `json:"blocks,omitempty" description:"新的后续依赖任务 ID 列表（若传入，则完全覆盖原有列表）"`
+	Owner       string   `json:"owner,omitempty" description:"新的负责人"`
+}
+
+type TaskUpdateResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func TaskUpdateHandler(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult, error) {
+	existing, err := GlobalTaskManager.GetTask(args.ID)
+	if err != nil {
+		return TaskUpdateResult{Success: false, Message: fmt.Sprintf("任务未找到: %s", args.ID)}, WrapToolError("task_update", args, err)
+	}
+
+	if args.Subject != "" {
+		existing.Subject = args.Subject
+	}
+	if args.Description != "" {
+		existing.Description = args.Description
+	}
+	if args.Status != "" {
+		existing.Status = args.Status
+	}
+	if args.BlockedBy != nil {
+		existing.BlockedBy = args.BlockedBy
+	}
+	if args.Blocks != nil {
+		existing.Blocks = args.Blocks
+	}
+	if args.Owner != "" {
+		existing.Owner = args.Owner
+	}
+
+	if err := GlobalTaskManager.SaveTask(existing); err != nil {
+		return TaskUpdateResult{Success: false, Message: err.Error()}, WrapToolError("task_update", args, err)
+	}
+	return TaskUpdateResult{Success: true, Message: fmt.Sprintf("✅ 任务已更新: %s", args.ID)}, nil
+}
+
+// TaskListArgs representing arguments for task_list.
+type TaskListArgs struct{}
+
+type TaskListResult struct {
+	Tasks []*TaskRecord `json:"tasks"`
+}
+
+func TaskListHandler(ctx tool.Context, args TaskListArgs) (TaskListResult, error) {
+	tasks, err := GlobalTaskManager.ListTasks()
+	if err != nil {
+		return TaskListResult{}, WrapToolError("task_list", args, err)
+	}
+	return TaskListResult{Tasks: tasks}, nil
+}
+
+// TaskGetArgs representing arguments for task_get.
+type TaskGetArgs struct {
+	ID string `json:"id" description:"任务唯一标识"`
+}
+
+type TaskGetResult struct {
+	Task *TaskRecord `json:"task"`
+}
+
+func TaskGetHandler(ctx tool.Context, args TaskGetArgs) (TaskGetResult, error) {
+	task, err := GlobalTaskManager.GetTask(args.ID)
+	if err != nil {
+		return TaskGetResult{}, WrapToolError("task_get", args, err)
+	}
+	return TaskGetResult{Task: task}, nil
+}
+
+// BackgroundRunArgs represents arguments for background_run.
+type BackgroundRunArgs struct {
+	Command string `json:"command" description:"要在后台线程执行的 Shell 命令。立刻返回 task_id。"`
+}
+
+type BackgroundRunResult struct {
+	Message string `json:"message"`
+}
+
+func BackgroundRunHandler(ctx tool.Context, args BackgroundRunArgs) (BackgroundRunResult, error) {
+	msg, err := GlobalBackgroundManager.Run(args.Command)
+	if err != nil {
+		return BackgroundRunResult{}, WrapToolError("background_run", args, err)
+	}
+	return BackgroundRunResult{Message: msg}, nil
+}
+
+// CheckBackgroundArgs represents arguments for check_background.
+type CheckBackgroundArgs struct {
+	TaskID string `json:"task_id,omitempty" description:"可选。特定后台任务 ID。如果省略，列出所有后台任务状态。"`
+}
+
+type CheckBackgroundResult struct {
+	Output string `json:"output"`
+}
+
+func CheckBackgroundHandler(ctx tool.Context, args CheckBackgroundArgs) (CheckBackgroundResult, error) {
+	out, err := GlobalBackgroundManager.Check(args.TaskID)
+	if err != nil {
+		return CheckBackgroundResult{}, WrapToolError("check_background", args, err)
+	}
+	return CheckBackgroundResult{Output: out}, nil
+}
+
+// ─── Schedule tool handlers ───────────────────────────────────────────────
+
+type ScheduleCreateArgs struct {
+	CronExpr  string `json:"cron_expr" description:"5位标准 Cron 表达式，如 '*/5 * * * *'"`
+	Prompt    string `json:"prompt" description:"触发时自动追加给大模型的指令文本"`
+	Recurring bool   `json:"recurring" description:"是否为循环任务，若为 false 则触发一次后自动销毁"`
+	Durable   bool   `json:"durable" description:"是否持久化到磁盘，若为 true 则在 CLI 重启后仍会恢复执行"`
+}
+
+type ScheduleCreateResult struct {
+	Message string `json:"message"`
+}
+
+func ScheduleCreateHandler(ctx tool.Context, args ScheduleCreateArgs) (ScheduleCreateResult, error) {
+	msg, err := GlobalCronScheduler.Create(args.CronExpr, args.Prompt, args.Recurring, args.Durable)
+	if err != nil {
+		return ScheduleCreateResult{}, WrapToolError("schedule_create", args, err)
+	}
+	return ScheduleCreateResult{Message: msg}, nil
+}
+
+type ScheduleListArgs struct{}
+
+type ScheduleListResult struct {
+	ActiveTasks string `json:"active_tasks"`
+}
+
+func ScheduleListHandler(ctx tool.Context, args ScheduleListArgs) (ScheduleListResult, error) {
+	out := GlobalCronScheduler.ListTasks()
+	return ScheduleListResult{ActiveTasks: out}, nil
+}
+
+type ScheduleDeleteArgs struct {
+	TaskID string `json:"task_id" description:"要删除的调度任务 ID"`
+}
+
+type ScheduleDeleteResult struct {
+	Message string `json:"message"`
+}
+
+func ScheduleDeleteHandler(ctx tool.Context, args ScheduleDeleteArgs) (ScheduleDeleteResult, error) {
+	msg, err := GlobalCronScheduler.Delete(args.TaskID)
+	if err != nil {
+		return ScheduleDeleteResult{}, WrapToolError("schedule_delete", args, err)
+	}
+	return ScheduleDeleteResult{Message: msg}, nil
+}
+
+// ─── Team tool handlers (s15) ──────────────────────────────────────────────
+
+type SpawnTeammateArgs struct {
+	Name         string `json:"name" description:"特工代理人唯一名称"`
+	Role         string `json:"role" description:"负责分工的角色，如 database, frontend"`
+	SystemPrompt string `json:"system_prompt" description:"系统指令"`
+}
+
+type SpawnTeammateResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func SpawnTeammateHandler(ctx tool.Context, args SpawnTeammateArgs) (SpawnTeammateResult, error) {
+	_, err := GlobalTeamManager.RegisterTeammate(args.Name, args.Role, args.SystemPrompt)
+	if err != nil {
+		return SpawnTeammateResult{Success: false}, WrapToolError("spawn_teammate", args, err)
+	}
+	err = GlobalTeamManager.StartTeammateLoop(args.Name)
+	if err != nil {
+		return SpawnTeammateResult{Success: false}, WrapToolError("spawn_teammate", args, err)
+	}
+	return SpawnTeammateResult{Success: true, Message: fmt.Sprintf("✅ 特工代理人 %s 已成功启动在后台", args.Name)}, nil
+}
+
+type ListTeammatesArgs struct{}
+
+type ListTeammatesResult struct {
+	Teammates []Teammate `json:"teammates"`
+}
+
+func ListTeammatesHandler(ctx tool.Context, args ListTeammatesArgs) (ListTeammatesResult, error) {
+	list, err := GlobalTeamManager.ListTeammates()
+	if err != nil {
+		return ListTeammatesResult{}, WrapToolError("list_teammates", args, err)
+	}
+	return ListTeammatesResult{Teammates: list}, nil
+}
+
+type SendMessageArgs struct {
+	Recipient string `json:"recipient" description:"接收消息的特工代理人名称"`
+	Content   string `json:"content" description:"发送的消息文本内容"`
+}
+
+type SendMessageResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func SendMessageHandler(ctx tool.Context, args SendMessageArgs) (SendMessageResult, error) {
+	msg := TeamMessage{
+		Sender:    "agent",
+		Content:   args.Content,
+		Timestamp: float64(time.Now().Unix()),
+	}
+	err := GlobalTeamManager.AppendToInbox(args.Recipient, msg)
+	if err != nil {
+		return SendMessageResult{Success: false}, WrapToolError("send_message", args, err)
+	}
+	return SendMessageResult{Success: true, Message: fmt.Sprintf("✅ 消息已发送至 %s", args.Recipient)}, nil
+}
+
+type ReadInboxArgs struct {
+	Name string `json:"name" description:"特工代理人的名称"`
+}
+
+type ReadInboxResult struct {
+	Messages []TeamMessage `json:"messages"`
+}
+
+func ReadInboxHandler(ctx tool.Context, args ReadInboxArgs) (ReadInboxResult, error) {
+	msgs, err := GlobalTeamManager.ReadAndClearInbox(args.Name)
+	if err != nil {
+		return ReadInboxResult{}, WrapToolError("read_inbox", args, err)
+	}
+	return ReadInboxResult{Messages: msgs}, nil
+}
+
+type BroadcastArgs struct {
+	Content string `json:"content" description:"广播至全体特工的文本消息"`
+}
+
+type BroadcastResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func BroadcastHandler(ctx tool.Context, args BroadcastArgs) (BroadcastResult, error) {
+	err := GlobalTeamManager.Broadcast("agent", args.Content)
+	if err != nil {
+		return BroadcastResult{Success: false}, WrapToolError("broadcast", args, err)
+	}
+	return BroadcastResult{Success: true, Message: "✅ 广播消息已发送给所有特工成员"}, nil
+}
+
+// ─── Protocol tool handlers (s16) ──────────────────────────────────────────
+
+type ProtocolShutdownRequestArgs struct {
+	Sender   string `json:"sender" description:"请求的发起特工名称"`
+	Receiver string `json:"receiver" description:"接收请求的特工名称"`
+	Reason   string `json:"reason" description:"请求停机的缘由说明"`
+}
+
+type ProtocolShutdownRequestResult struct {
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+}
+
+func ProtocolShutdownRequestHandler(ctx tool.Context, args ProtocolShutdownRequestArgs) (ProtocolShutdownRequestResult, error) {
+	req, err := GlobalProtocolManager.CreateRequest("shutdown", args.Sender, args.Receiver, map[string]any{"reason": args.Reason})
+	if err != nil {
+		return ProtocolShutdownRequestResult{}, WrapToolError("protocol_shutdown_request", args, err)
+	}
+	return ProtocolShutdownRequestResult{RequestID: req.RequestID, Status: req.Status}, nil
+}
+
+type ProtocolShutdownResponseArgs struct {
+	RequestID string `json:"request_id" description:"待确认的停机请求 ID"`
+	Approved  bool   `json:"approved" description:"是否同意停机"`
+	Comment   string `json:"comment,omitempty" description:"审批评语"`
+}
+
+type ProtocolShutdownResponseResult struct {
+	Success bool   `json:"success"`
+	Status  string `json:"status"`
+}
+
+func ProtocolShutdownResponseHandler(ctx tool.Context, args ProtocolShutdownResponseArgs) (ProtocolShutdownResponseResult, error) {
+	req, err := GlobalProtocolManager.RespondToRequest(args.RequestID, args.Approved, args.Comment)
+	if err != nil {
+		return ProtocolShutdownResponseResult{}, WrapToolError("protocol_shutdown_response", args, err)
+	}
+	return ProtocolShutdownResponseResult{Success: true, Status: req.Status}, nil
+}
+
+type ProtocolPlanApprovalRequestArgs struct {
+	Sender   string `json:"sender" description:"发起方案审批的特工名称"`
+	Receiver string `json:"receiver" description:"负责审批方案的特工名称"`
+	Plan     string `json:"plan" description:"拟审批的详细方案或步骤清单"`
+}
+
+type ProtocolPlanApprovalRequestResult struct {
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+}
+
+func ProtocolPlanApprovalRequestHandler(ctx tool.Context, args ProtocolPlanApprovalRequestArgs) (ProtocolPlanApprovalRequestResult, error) {
+	req, err := GlobalProtocolManager.CreateRequest("plan_approval", args.Sender, args.Receiver, map[string]any{"plan": args.Plan})
+	if err != nil {
+		return ProtocolPlanApprovalRequestResult{}, WrapToolError("protocol_plan_approval_request", args, err)
+	}
+	return ProtocolPlanApprovalRequestResult{RequestID: req.RequestID, Status: req.Status}, nil
+}
+
+type ProtocolPlanApprovalResponseArgs struct {
+	RequestID string `json:"request_id" description:"待审批的方案请求 ID"`
+	Approved  bool   `json:"approved" description:"是否批准此方案"`
+	Comment   string `json:"comment,omitempty" description:"修改意见或评语"`
+}
+
+type ProtocolPlanApprovalResponseResult struct {
+	Success bool   `json:"success"`
+	Status  string `json:"status"`
+}
+
+func ProtocolPlanApprovalResponseHandler(ctx tool.Context, args ProtocolPlanApprovalResponseArgs) (ProtocolPlanApprovalResponseResult, error) {
+	req, err := GlobalProtocolManager.RespondToRequest(args.RequestID, args.Approved, args.Comment)
+	if err != nil {
+		return ProtocolPlanApprovalResponseResult{}, WrapToolError("protocol_plan_approval_response", args, err)
+	}
+	return ProtocolPlanApprovalResponseResult{Success: true, Status: req.Status}, nil
+}
+
+// ─── Autonomous agent tool handlers (s17) ──────────────────────────────────
+
+type AgentClaimTaskArgs struct {
+	TeammateName string   `json:"teammate_name" description:"声明认领任务的特工名称"`
+	Keywords     []string `json:"keywords" description:"匹配任务标题的主题关键字列表"`
+}
+
+type AgentClaimTaskResult struct {
+	ClaimedTasks []string `json:"claimed_tasks"`
+}
+
+func AgentClaimTaskHandler(ctx tool.Context, args AgentClaimTaskArgs) (AgentClaimTaskResult, error) {
+	claimed, err := GlobalAutonomyManager.AutoClaimTasks(args.TeammateName, args.Keywords)
+	if err != nil {
+		return AgentClaimTaskResult{}, WrapToolError("agent_claim_task", args, err)
+	}
+	return AgentClaimTaskResult{ClaimedTasks: claimed}, nil
+}
+
+type AgentSetStateArgs struct {
+	State string `json:"state" description:"状态，可选：WORK, IDLE"`
+}
+
+type AgentSetStateResult struct {
+	Success bool   `json:"success"`
+	State   string `json:"state"`
+}
+
+func AgentSetStateHandler(ctx tool.Context, args AgentSetStateArgs) (AgentSetStateResult, error) {
+	s := AgentState(args.State)
+	if s != StateWork && s != StateIdle {
+		return AgentSetStateResult{Success: false}, fmt.Errorf("invalid agent state: %s (must be WORK or IDLE)", args.State)
+	}
+	GlobalAutonomyManager.SetState(s)
+	return AgentSetStateResult{Success: true, State: string(s)}, nil
+}
+
+// ─── Worktree tool handlers (s18) ──────────────────────────────────────────
+
+type WorktreeCreateArgs struct {
+	Name   string `json:"name" description:"隔离工作区分支名称，如 wt-feat-auth"`
+	TaskID string `json:"task_id" description:"绑定的任务 ID"`
+}
+
+type WorktreeCreateResult struct {
+	Success bool   `json:"success"`
+	Path    string `json:"path"`
+	Branch  string `json:"branch"`
+}
+
+func WorktreeCreateHandler(ctx tool.Context, args WorktreeCreateArgs) (WorktreeCreateResult, error) {
+	entry, err := GlobalWorktreeManager.Create(args.Name, args.TaskID)
+	if err != nil {
+		return WorktreeCreateResult{Success: false}, WrapToolError("worktree_create", args, err)
+	}
+	return WorktreeCreateResult{Success: true, Path: entry.Path, Branch: entry.Branch}, nil
+}
+
+type WorktreeListArgs struct{}
+
+type WorktreeListResult struct {
+	Worktrees []WorktreeEntry `json:"worktrees"`
+}
+
+func WorktreeListHandler(ctx tool.Context, args WorktreeListArgs) (WorktreeListResult, error) {
+	list, err := GlobalWorktreeManager.List()
+	if err != nil {
+		return WorktreeListResult{}, WrapToolError("worktree_list", args, err)
+	}
+	return WorktreeListResult{Worktrees: list}, nil
+}
+
+type WorktreeStatusArgs struct {
+	Name string `json:"name" description:"待查询的隔离区名称"`
+}
+
+type WorktreeStatusResult struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	TaskID string `json:"task_id"`
+}
+
+func WorktreeStatusHandler(ctx tool.Context, args WorktreeStatusArgs) (WorktreeStatusResult, error) {
+	_ = GlobalWorktreeManager.LoadIndex()
+	GlobalWorktreeManager.mu.RLock()
+	entry, ok := GlobalWorktreeManager.entries[args.Name]
+	GlobalWorktreeManager.mu.RUnlock()
+
+	if !ok {
+		return WorktreeStatusResult{}, fmt.Errorf("worktree '%s' not found", args.Name)
+	}
+	return WorktreeStatusResult{Name: entry.Name, Status: entry.Status, TaskID: entry.TaskID}, nil
+}
+
+type WorktreeEnterArgs struct {
+	Name string `json:"name" description:"要切换并进入的隔离区名称"`
+}
+
+type WorktreeEnterResult struct {
+	Success bool `json:"success"`
+}
+
+func WorktreeEnterHandler(ctx tool.Context, args WorktreeEnterArgs) (WorktreeEnterResult, error) {
+	err := GlobalWorktreeManager.Enter(args.Name)
+	if err != nil {
+		return WorktreeEnterResult{Success: false}, WrapToolError("worktree_enter", args, err)
+	}
+	return WorktreeEnterResult{Success: true}, nil
+}
+
+type WorktreeCloseoutArgs struct {
+	Name         string `json:"name" description:"隔离区名称"`
+	Action       string `json:"action" description:"收尾操作类型，可选：keep, remove"`
+	CompleteTask bool   `json:"complete_task" description:"是否同时联动将绑定的任务状态标记为已完成"`
+}
+
+type WorktreeCloseoutResult struct {
+	Success bool `json:"success"`
+}
+
+func WorktreeCloseoutHandler(ctx tool.Context, args WorktreeCloseoutArgs) (WorktreeCloseoutResult, error) {
+	err := GlobalWorktreeManager.Closeout(args.Name, args.Action, args.CompleteTask)
+	if err != nil {
+		return WorktreeCloseoutResult{Success: false}, WrapToolError("worktree_closeout", args, err)
+	}
+	return WorktreeCloseoutResult{Success: true}, nil
+}
+
+// ─── MCP tool handlers (s19) ───────────────────────────────────────────────
+
+type MCPServerListArgs struct{}
+
+type MCPServerListResult struct {
+	Servers map[string]string `json:"servers"`
+}
+
+func MCPServerListHandler(ctx tool.Context, args MCPServerListArgs) (MCPServerListResult, error) {
+	list := GlobalMCPRouter.ListServers()
+	return MCPServerListResult{Servers: list}, nil
 }

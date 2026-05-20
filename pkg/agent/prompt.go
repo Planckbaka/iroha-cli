@@ -51,11 +51,16 @@ func NewSystemPromptBuilder() *SystemPromptBuilder {
 func (b *SystemPromptBuilder) Build() string {
 	var sb strings.Builder
 
+	// Prepend <identity> block if GlobalMessageCount < 3
+	if GlobalMessageCount < 3 {
+		sb.WriteString(GetIdentityTagBlock())
+	}
+
 	// ─── 1. STABLE PREFIX SECTION ──────────────────────────────────────────
 
 	// Core Persona & Instructions
 	sb.WriteString("# Role & Core Persona\n")
-	sb.WriteString("你是一个专业的软件工程助手，名叫 go-claude。你可以帮助用户读取文件、写入文件、在当前工作区运行测试与命令、以及检索代码。对于写文件和运行 Shell 命令等敏感操作，你必须调用相应的工具，并且框架会请求用户确认。请以精美的 Markdown 格式回答用户的问题。\n\n")
+	sb.WriteString("你是一个专业的软件工程助手，名叫 go-claude。你可以帮助用户读取文件、写入文件、在当前工作区运行测试与命令、以及检索代码。对于写文件 and 运行 Shell 命令等敏感操作，你必须调用相应的工具，并且框架会请求用户确认。请以精美的 Markdown 格式回答用户的问题。\n\n")
 
 	// Persistent Memories
 	if memSection := GlobalMemoryManager.BuildSystemPromptSection(); memSection != "" {
@@ -90,6 +95,53 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString(fmt.Sprintf("- Active Safety Mode: %s\n", mode))
 	sb.WriteString(fmt.Sprintf("- Security Rule Count: %d rules\n", len(rules)))
 	sb.WriteString(fmt.Sprintf("- Consecutive Denials Count: %d\n\n", denials))
+
+	// Active Tasks in Durable Work Graph
+	if tasks, err := GlobalTaskManager.ListTasks(); err == nil && len(tasks) > 0 {
+		sb.WriteString("# Active Persistent Tasks (Durable Work Graph)\n")
+		for _, t := range tasks {
+			statusMarker := "[ ]"
+			if t.Status == "in_progress" {
+				statusMarker = "[>]"
+			} else if t.Status == "completed" {
+				statusMarker = "[x]"
+			}
+			
+			depStr := ""
+			if len(t.BlockedBy) > 0 {
+				depStr = fmt.Sprintf(" (blocked by: %s)", strings.Join(t.BlockedBy, ", "))
+			}
+			sb.WriteString(fmt.Sprintf("  %s %s - %s (owner: %s)%s\n", statusMarker, t.ID, t.Subject, t.Owner, depStr))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Active Teammates
+	if teammates, err := GlobalTeamManager.ListTeammates(); err == nil && len(teammates) > 0 {
+		sb.WriteString("# Active Team Roster\n")
+		for _, t := range teammates {
+			sb.WriteString(fmt.Sprintf("  - %s (%s) - status: %s, last active: %s\n", t.Name, t.Role, t.Status, t.LastActive.Format("15:04:05")))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Inbox Alerts for main agent
+	if msgs, err := GlobalTeamManager.PeekInbox("user-dev"); err == nil && len(msgs) > 0 {
+		sb.WriteString("# 📬 Inbox Alerts (Unread Messages)\n")
+		for i, msg := range msgs {
+			sb.WriteString(fmt.Sprintf("  %d. From [%s] at %s:\n      %s\n", i+1, msg.Sender, time.Unix(int64(msg.Timestamp), 0).Format("15:04:05"), msg.Content))
+		}
+		sb.WriteString("  (Use the `read_inbox` tool to mark these as read and clear your inbox)\n\n")
+	}
+
+	// Active Worktrees
+	if worktrees, err := GlobalWorktreeManager.List(); err == nil && len(worktrees) > 0 {
+		sb.WriteString("# Active Worktree Branches\n")
+		for _, w := range worktrees {
+			sb.WriteString(fmt.Sprintf("  - %s (branch: %s) - task: %s, status: %s, path: %s\n", w.Name, w.Branch, w.TaskID, w.Status, w.Path))
+		}
+		sb.WriteString("\n")
+	}
 
 	// System Reminder
 	sb.WriteString("⚠️ [System Reminder]\n")
