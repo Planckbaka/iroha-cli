@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"google.golang.org/adk/model"
@@ -52,6 +53,21 @@ func (s *SimulatedAdapter) Name() string {
 
 func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
+		// Build dynamic system prompt
+		var systemPrompt string
+		if SystemPromptTrigger != nil {
+			systemPrompt = SystemPromptTrigger()
+		} else if req.Config != nil && req.Config.SystemInstruction != nil {
+			var parts []string
+			for _, p := range req.Config.SystemInstruction.Parts {
+				if p.Text != "" {
+					parts = append(parts, p.Text)
+				}
+			}
+			systemPrompt = strings.Join(parts, "\n")
+		}
+		_ = systemPrompt
+
 		// Extract user prompt from the last content
 		userPrompt := "hello"
 		if len(req.Contents) > 0 {
