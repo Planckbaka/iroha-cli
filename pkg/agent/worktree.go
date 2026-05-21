@@ -115,7 +115,7 @@ func (wm *WorktreeManager) LogEvent(event, name, taskID, extra string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	logLine := map[string]any{
 		"event":     event,

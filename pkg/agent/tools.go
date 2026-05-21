@@ -239,15 +239,6 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 	return GrepResult{Matches: matches}, err
 }
 
-func containsAnyPath(path string, segments []string) bool {
-	for _, s := range segments {
-		if filepath.Base(path) == s || strings.Contains(path, string(filepath.Separator)+s+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
 // 4. shell_run (需要极其严格的人机确认)
 type ShellRunArgs struct {
 	Command string `json:"command" description:"要执行的本地 Shell 命令"`
@@ -278,14 +269,14 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 	if err := cmd.Start(); err != nil {
 		return ShellRunResult{}, err
 	}
-	defer cmd.Process.Kill()
+	defer func() { _ = cmd.Process.Kill() }()
 
 	// stderr 合并 goroutine
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		io.Copy(multiWriter, stderr)
+		_, _ = io.Copy(multiWriter, stderr)
 	}()
 
 	// 逐行流式扫描
@@ -305,8 +296,8 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 
 	// 顺序保证：scanner EOF → join stderr goroutine → 关闭 pipe writer → cmd.Wait()
 	wg.Wait()
-	pw.Close()
-	cmd.Wait()
+	_ = pw.Close()
+	_ = cmd.Wait()
 
 	// 构建最终结果
 	exitCode := 0

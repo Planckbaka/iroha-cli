@@ -618,7 +618,7 @@ func RenderShellStreamArea(lines []string, cmd string, width int) string {
 		cmdDisplay = cmdDisplay[:width-17] + "..."
 	}
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Render(" shell: "))
-	sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("$ "+cmdDisplay))
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("$ " + cmdDisplay))
 	sb.WriteString("\n")
 
 	if truncated > 0 {
@@ -827,19 +827,6 @@ func RenderBackgroundDashboard() string {
 		MarginBottom(1)
 
 	return cardStyle.Render(sb.String()) + "\n"
-}
-
-func getActiveTaskInfo() string {
-	tasks, err := agent.GlobalTaskManager.ListTasks()
-	if err != nil || len(tasks) == 0 {
-		return ""
-	}
-	for _, t := range tasks {
-		if t.Status == "in_progress" {
-			return fmt.Sprintf("task: %s", t.ID)
-		}
-	}
-	return ""
 }
 
 // RenderStatusBar renders an enhanced status bar with agent activity and token count

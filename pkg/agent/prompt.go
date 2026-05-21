@@ -132,7 +132,7 @@ func (b *SystemPromptBuilder) Build() string {
 			} else if t.Status == "completed" {
 				statusMarker = "[x]"
 			}
-			
+
 			depStr := ""
 			if len(t.BlockedBy) > 0 {
 				depStr = fmt.Sprintf(" (blocked by: %s)", strings.Join(t.BlockedBy, ", "))

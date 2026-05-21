@@ -182,7 +182,7 @@ func (tm *TeamManager) AppendToInbox(name string, msg TeamMessage) error {
 	if err != nil {
 		return fmt.Errorf("failed to open inbox for %s: %w", name, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	data, err := json.Marshal(msg)
 	if err != nil {

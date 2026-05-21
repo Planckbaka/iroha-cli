@@ -7,10 +7,10 @@ import (
 )
 
 type diffOp struct {
-	typ     rune   // ' ' (common), '+' (addition), '-' (deletion)
+	typ     rune // ' ' (common), '+' (addition), '-' (deletion)
 	line    string
-	origIdx int    // 1-based line number in original file
-	newIdx  int    // 1-based line number in new file
+	origIdx int // 1-based line number in original file
+	newIdx  int // 1-based line number in new file
 }
 
 // computeFileDiff reads the file at path and generates a beautiful colored unified diff

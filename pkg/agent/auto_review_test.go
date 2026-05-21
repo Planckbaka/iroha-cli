@@ -287,4 +287,3 @@ func TestHeuristicReview_HardenedRules(t *testing.T) {
 		})
 	}
 }
-

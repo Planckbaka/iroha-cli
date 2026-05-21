@@ -17,10 +17,10 @@ const (
 
 // AutonomousManager coordinates task auto-polling and state transitions.
 type AutonomousManager struct {
-	mu            sync.RWMutex
-	state         AgentState
-	activePoll    bool
-	stopChan      chan struct{}
+	mu         sync.RWMutex
+	state      AgentState
+	activePoll bool
+	stopChan   chan struct{}
 }
 
 // GlobalAutonomyManager is the singleton autonomy manager.

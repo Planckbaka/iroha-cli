@@ -125,9 +125,15 @@ func TestAutonomous_BackgroundLoop(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	GlobalTaskManager.mu.Lock()
 	originalTasksDir := GlobalTaskManager.tasksDir
 	GlobalTaskManager.tasksDir = tempDir
-	defer func() { GlobalTaskManager.tasksDir = originalTasksDir }()
+	GlobalTaskManager.mu.Unlock()
+	defer func() {
+		GlobalTaskManager.mu.Lock()
+		GlobalTaskManager.tasksDir = originalTasksDir
+		GlobalTaskManager.mu.Unlock()
+	}()
 
 	t1 := &TaskRecord{
 		ID:      "t1",

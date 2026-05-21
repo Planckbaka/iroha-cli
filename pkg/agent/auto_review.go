@@ -194,7 +194,7 @@ func normalizeCommand(cmd string) string {
 		if ch == '\\' && !inSingle && !inDouble {
 			continue
 		}
-		
+
 		// Convert tabs, newlines, carriage returns to standard spaces
 		if ch == '\t' || ch == '\n' || ch == '\r' {
 			sb.WriteByte(' ')

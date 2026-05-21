@@ -86,5 +86,3 @@ var (
 	StyleDiffDel = lipgloss.NewStyle().
 			Foreground(ColorDanger)
 )
-
-

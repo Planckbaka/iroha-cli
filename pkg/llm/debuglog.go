@@ -47,7 +47,7 @@ func DebugLog(format string, args ...any) {
 	}
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf("[%s] %s\n", ts, fmt.Sprintf(format, args...))
-	debugFile.WriteString(msg)
+	_, _ = debugFile.WriteString(msg)
 }
 
 // DumpDebugFile writes raw bytes to a companion file.
@@ -56,5 +56,5 @@ func DumpDebugFile(name string, data []byte) {
 		return
 	}
 	path := filepath.Join(filepath.Dir(debugLogPath), "iroha-debug-"+name)
-	os.WriteFile(path, data, 0644)
+	_ = os.WriteFile(path, data, 0644)
 }

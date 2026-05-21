@@ -45,7 +45,6 @@ func (g *OpenAICompatibleAdapter) Name() string {
 	return g.modelName
 }
 
-
 func (g *OpenAICompatibleAdapter) CumulativeTokens() int {
 	return g.cumulativeTokens
 }
@@ -56,15 +55,15 @@ func (g *OpenAICompatibleAdapter) AddTokens(n int) {
 
 // Zhipu GLM-4 API structures (OpenAI compatible)
 type chatMessage struct {
-	Role       string        `json:"role"`
-	Content    any           `json:"content,omitempty"`
+	Role       string         `json:"role"`
+	Content    any            `json:"content,omitempty"`
 	Tools      []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 type chatToolCall struct {
-	ID       string      `json:"id"`
-	Type     string      `json:"type"`
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
 	Function chatFunction `json:"function"`
 }
 
@@ -74,7 +73,7 @@ type chatFunction struct {
 }
 
 type chatToolSchema struct {
-	Type     string            `json:"type"`
+	Type     string             `json:"type"`
 	Function chatFunctionSchema `json:"function"`
 }
 
@@ -85,10 +84,10 @@ type chatFunctionSchema struct {
 }
 
 type chatRequest struct {
-	Model    string          `json:"model"`
+	Model    string           `json:"model"`
 	Messages []chatMessage    `json:"messages"`
 	Tools    []chatToolSchema `json:"tools,omitempty"`
-	Stream   bool            `json:"stream"`
+	Stream   bool             `json:"stream"`
 }
 
 type chatStreamResponse struct {
@@ -119,7 +118,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 	if g.apiKey == "" || g.apiKey == "simulate" {
 		return func(yield func(*model.LLMResponse, error) bool) {
 			yield(nil, fmt.Errorf("OpenAI-compatible adapter requires an API key; use provider=simulate for offline mode"))
-			return
 		}
 	}
 
@@ -270,16 +268,16 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 		DumpDebugFile("req.json", reqBytes)
 
 		// 4. Send HTTP request to dynamic endpoint
-			apiURL := g.baseURL
-			if apiURL == "" {
-				if !yield(nil, fmt.Errorf("OpenAI-compatible adapter requires a base URL; set --base-url or provider config")) {
-					return
-				}
+		apiURL := g.baseURL
+		if apiURL == "" {
+			if !yield(nil, fmt.Errorf("OpenAI-compatible adapter requires a base URL; set --base-url or provider config")) {
 				return
 			}
-			if !strings.HasSuffix(apiURL, "/chat/completions") {
-				apiURL = strings.TrimSuffix(apiURL, "/") + "/chat/completions"
-			}
+			return
+		}
+		if !strings.HasSuffix(apiURL, "/chat/completions") {
+			apiURL = strings.TrimSuffix(apiURL, "/") + "/chat/completions"
+		}
 
 		var resp *http.Response
 		var lastErr error
@@ -550,4 +548,3 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 		}
 	}
 }
-

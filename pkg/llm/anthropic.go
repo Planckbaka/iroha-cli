@@ -54,8 +54,8 @@ func (a *AnthropicAdapter) AddTokens(n int) {
 // Anthropic Messages API types
 
 type anthropicMessage struct {
-	Role    string                   `json:"role"`
-	Content []anthropicContentBlock  `json:"content"`
+	Role    string                  `json:"role"`
+	Content []anthropicContentBlock `json:"content"`
 }
 
 type anthropicContentBlock struct {
@@ -77,31 +77,12 @@ type anthropicTool struct {
 }
 
 type anthropicRequest struct {
-	Model       string              `json:"model"`
-	MaxTokens   int                 `json:"max_tokens"`
-	Messages    []anthropicMessage  `json:"messages"`
-	System      string              `json:"system,omitempty"`
-	Tools       []anthropicTool     `json:"tools,omitempty"`
-	Stream      bool                `json:"stream"`
-}
-
-// SSE event types for Anthropic streaming
-type anthropicSSEEvent struct {
-	Type  string          `json:"type"`
-	Index int             `json:"index,omitempty"`
-	Delta json.RawMessage `json:"delta,omitempty"`
-	Message json.RawMessage `json:"message,omitempty"`
-	Usage   *anthropicUsage `json:"usage,omitempty"`
-	ContentBlock *anthropicContentBlock `json:"content_block,omitempty"`
-}
-
-type anthropicMessageStart struct {
-	ID      string          `json:"id"`
-	Type    string          `json:"type"`
-	Role    string          `json:"role"`
-	Content []any           `json:"content"`
-	Model   string          `json:"model"`
-	Usage   anthropicUsage  `json:"usage"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	System    string             `json:"system,omitempty"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream"`
 }
 
 type anthropicUsage struct {
@@ -122,9 +103,9 @@ type anthropicToolUseDelta struct {
 }
 
 type anthropicMessageDelta struct {
-	Type  string          `json:"type"`
+	Type  string              `json:"type"`
 	Delta anthropicUsageDelta `json:"delta"`
-	Usage anthropicUsage  `json:"usage"`
+	Usage anthropicUsage      `json:"usage"`
 }
 
 type anthropicUsageDelta struct {
@@ -135,7 +116,6 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 	if a.apiKey == "" {
 		return func(yield func(*model.LLMResponse, error) bool) {
 			yield(nil, fmt.Errorf("Anthropic adapter requires an API key"))
-			return
 		}
 	}
 
@@ -309,10 +289,6 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 
 			line = strings.TrimSpace(line)
 			if line == "" || !strings.HasPrefix(line, "event: ") {
-				// Could be a data line
-				if strings.HasPrefix(line, "data: ") {
-					// We handle data inline based on last event type
-				}
 				continue
 			}
 
@@ -346,8 +322,8 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 
 			case "content_block_start":
 				var blockStart struct {
-					Index                int                  `json:"index"`
-					ContentBlock         *anthropicContentBlock `json:"content_block"`
+					Index        int                    `json:"index"`
+					ContentBlock *anthropicContentBlock `json:"content_block"`
 				}
 				if err := json.Unmarshal([]byte(dataStr), &blockStart); err == nil && blockStart.ContentBlock != nil {
 					if blockStart.ContentBlock.Type == "tool_use" {

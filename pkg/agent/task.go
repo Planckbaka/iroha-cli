@@ -15,7 +15,7 @@ type TaskRecord struct {
 	ID          string   `json:"id"`
 	Subject     string   `json:"subject"`
 	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"` // "pending", "in_progress", "completed", "deleted"
+	Status      string   `json:"status"`    // "pending", "in_progress", "completed", "deleted"
 	BlockedBy   []string `json:"blockedBy"` // prerequisite task IDs
 	Blocks      []string `json:"blocks"`    // dependent task IDs
 	Owner       string   `json:"owner"`     // "agent" or "user"

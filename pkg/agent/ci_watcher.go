@@ -69,13 +69,13 @@ func AgentWatchCIHandler(ctx tool.Context, args CIWatchArgs) (CIWatchResult, err
 
 			msgContent := fmt.Sprintf("CI Watcher Alert! The CI run failed.\n\nLogs snippet:\n%s\n\nPlease check the code and autofix.", strings.Join(tail, "\n"))
 
-			GlobalTeamManager.AppendToInbox(args.Owner, TeamMessage{
+			_ = GlobalTeamManager.AppendToInbox(args.Owner, TeamMessage{
 				Sender:    "CI-Watcher",
 				Timestamp: float64(time.Now().Unix()),
 				Content:   msgContent,
 			})
 		} else {
-			GlobalTeamManager.AppendToInbox(args.Owner, TeamMessage{
+			_ = GlobalTeamManager.AppendToInbox(args.Owner, TeamMessage{
 				Sender:    "CI-Watcher",
 				Timestamp: float64(time.Now().Unix()),
 				Content:   "CI Watcher Alert! The CI run completed successfully. You can merge now if automerge is not enabled.",

@@ -46,16 +46,16 @@ type PluginsConfig struct {
 
 // MCPClient handles stdio-based JSON-RPC 2.0 lifecycle over a child process.
 type MCPClient struct {
-	mu        sync.Mutex
-	name      string
-	config    MCPServerConfig
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdout    io.ReadCloser
-	stderr    io.ReadCloser
-	pending   map[int64]chan *JsonRpcMessage
-	nextID    int64
-	stopChan  chan struct{}
+	mu       sync.Mutex
+	name     string
+	config   MCPServerConfig
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   io.ReadCloser
+	stderr   io.ReadCloser
+	pending  map[int64]chan *JsonRpcMessage
+	nextID   int64
+	stopChan chan struct{}
 }
 
 // NewMCPClient creates an MCPClient instance.

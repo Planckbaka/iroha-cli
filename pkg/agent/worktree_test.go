@@ -102,7 +102,7 @@ func TestWorktreeManager_Lifecycle(t *testing.T) {
 	if err := wm.Closeout("login-wt", "keep", false); err != nil {
 		t.Fatalf("failed to closeout worktree with 'keep': %v", err)
 	}
-	entryRefreshed, _ := wm.entries["login-wt"]
+	entryRefreshed := wm.entries["login-wt"]
 	if entryRefreshed.Status != "kept" {
 		t.Errorf("expected status 'kept', got: %s", entryRefreshed.Status)
 	}
@@ -112,7 +112,7 @@ func TestWorktreeManager_Lifecycle(t *testing.T) {
 		t.Fatalf("failed to closeout worktree with 'remove': %v", err)
 	}
 
-	entryRefreshed2, _ := wm.entries["login-wt"]
+	entryRefreshed2 := wm.entries["login-wt"]
 	if entryRefreshed2.Status != "removed" {
 		t.Errorf("expected status 'removed', got: %s", entryRefreshed2.Status)
 	}

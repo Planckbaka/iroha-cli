@@ -218,7 +218,6 @@ type ToolStatusMsg struct {
 	Status agent.ToolStatus
 }
 
-
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -850,7 +849,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update text area only in prompt state, then update slash menu filter
 	if m.State == statePrompt {
 		prevVal := m.TextArea.Value()
-		m.TextArea, cmd = m.TextArea.Update(msg)
+		var taCmd tea.Cmd
+		m.TextArea, taCmd = m.TextArea.Update(msg)
+		cmd = tea.Batch(cmd, taCmd)
 		newVal := m.TextArea.Value()
 		// Update slash menu if the input changed
 		if newVal != prevVal {

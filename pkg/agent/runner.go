@@ -100,7 +100,6 @@ func (tb *ToolStatusBridge) drain() {
 	}
 }
 
-
 // CustomRunner wraps ADK runner and manages background execution
 type CustomRunner struct {
 	adkRunner *runner.Runner
