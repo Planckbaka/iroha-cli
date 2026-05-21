@@ -338,7 +338,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 			resp, err = client.Do(httpReq)
 			if err != nil {
-				lastErr = fmt.Errorf("调用智谱 API 失败: %w", err)
+				lastErr = fmt.Errorf("调用大模型 API (%s) 失败: %w", g.modelName, err)
 				continue
 			}
 
@@ -347,7 +347,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				_ = resp.Body.Close()
 
 				isTransient := resp.StatusCode == 429 || resp.StatusCode >= 500
-				lastErr = fmt.Errorf("智谱 API 返回错误码 %d: %s", resp.StatusCode, string(bodyBytes))
+				lastErr = fmt.Errorf("大模型 API (%s) 返回错误码 %d: %s", g.modelName, resp.StatusCode, string(bodyBytes))
 
 				if isTransient {
 					continue

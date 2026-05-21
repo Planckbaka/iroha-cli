@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -15,11 +16,14 @@ import (
 type ProviderType string
 
 const (
-	ProviderGemini   ProviderType = "gemini"
-	ProviderClaude   ProviderType = "claude"
-	ProviderOpenAI   ProviderType = "openai"
-	ProviderGLM      ProviderType = "glm"
-	ProviderSimulate ProviderType = "simulate"
+	ProviderGemini      ProviderType = "gemini"
+	ProviderClaude      ProviderType = "claude"
+	ProviderOpenAI      ProviderType = "openai"
+	ProviderGLM         ProviderType = "glm"
+	ProviderDeepSeek    ProviderType = "deepseek"
+	ProviderKimi        ProviderType = "kimi"
+	ProviderSiliconFlow ProviderType = "siliconflow"
+	ProviderSimulate    ProviderType = "simulate"
 )
 
 // AdapterHooks provides runtime callbacks for adapter behavior.
@@ -36,13 +40,36 @@ type TokenTracker interface {
 
 // NewAdapter creates a new model.LLM based on the provider, model name, apiKey, optional baseURL,
 // a systemPrompt string, and runtime hooks.
-func NewAdapter(provider ProviderType, modelName string, apiKey string, baseURL string, systemPrompt string, hooks AdapterHooks) (model.LLM, error) {
-	switch provider {
-	case ProviderSimulate:
+func NewAdapter(g *genkit.Genkit, provider ProviderType, modelName string, apiKey string, baseURL string, systemPrompt string, hooks AdapterHooks) (model.LLM, error) {
+	if provider == ProviderSimulate {
 		return NewSimulatedAdapter(modelName, systemPrompt, hooks), nil
+	}
+
+	if g != nil {
+		genkitModelName := modelName
+		switch provider {
+		case ProviderGemini:
+			if !strings.HasPrefix(genkitModelName, "googleai/") {
+				genkitModelName = "googleai/" + genkitModelName
+			}
+		case ProviderClaude:
+			if !strings.HasPrefix(genkitModelName, "anthropic/") {
+				genkitModelName = "anthropic/" + genkitModelName
+			}
+		default:
+			// OpenAI compatible
+			pref := string(provider) + "/"
+			if !strings.HasPrefix(genkitModelName, pref) {
+				genkitModelName = pref + genkitModelName
+			}
+		}
+		return NewGenkitModelAdapter(g, genkitModelName, systemPrompt, hooks), nil
+	}
+
+	switch provider {
 	case ProviderGemini:
 		return NewSimulatedAdapter("gemini-2.5-flash-simulated", systemPrompt, hooks), nil
-	case ProviderGLM, ProviderOpenAI:
+	case ProviderGLM, ProviderOpenAI, ProviderDeepSeek, ProviderKimi, ProviderSiliconFlow:
 		return NewOpenAICompatibleAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil
 	case ProviderClaude:
 		return NewAnthropicAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil

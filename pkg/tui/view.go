@@ -196,6 +196,66 @@ func RenderPermissionSelectScreen(m Model) string {
 	return sb.String()
 }
 
+// RenderSessionSelectScreen renders the interactive sessions picker screen.
+func RenderSessionSelectScreen(m Model) string {
+	var sb strings.Builder
+
+	sb.WriteString("\n\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).
+		Render("  Iroha Code — 会话历史管理器") + "\n\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
+		Render("  请选择要恢复的会话，或者启动一个新的会话：") + "\n\n")
+
+	// Render virtual "[Start New Session]" entry
+	var line string
+	if m.SessionListIndex == 0 {
+		pointer := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("▶ ")
+		label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render("[ 启动全新会话 ]")
+		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render("开启一个没有历史记忆的全新独立会话。")
+		line = "  " + pointer + label + "\n     " + desc
+	} else {
+		label := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("[ 启动全新会话 ]")
+		desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render("开启一个没有历史记忆的全新独立会话。")
+		line = "     " + label + "  " + desc
+	}
+	sb.WriteString(line + "\n\n")
+
+	// Render historical sessions
+	for i, sess := range m.SessionsList {
+		var line string
+		isActive := sess.ID == m.SessionID
+		activeTag := ""
+		if isActive {
+			activeTag = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" (当前活跃)")
+		}
+
+		timeStr := sess.LastUpdateTime.Format("2006-01-02 15:04:05")
+
+		if i+1 == m.SessionListIndex {
+			pointer := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("▶ ")
+			label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render(sess.FirstPrompt)
+			desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render(
+				fmt.Sprintf("ID: %s  更新时间: %s  路径: %s%s", sess.ID, timeStr, sess.CWD, activeTag))
+			line = "  " + pointer + label + "\n     " + desc
+		} else {
+			labelStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+			if isActive {
+				labelStyle = labelStyle.Foreground(ColorSuccess)
+			}
+			label := labelStyle.Render(sess.FirstPrompt)
+			desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render(
+				fmt.Sprintf("更新时间: %s  路径: %s%s", timeStr, sess.CWD, activeTag))
+			line = "     " + label + "\n     " + desc
+		}
+		sb.WriteString(line + "\n\n")
+	}
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
+		Render("  ↑↓ 选择   Enter 确认   Esc 返回   Ctrl+C 退出") + "\n")
+
+	return sb.String()
+}
+
 // RenderPermissionSelect renders an inline permission selection card (used after /permission command)
 func RenderPermissionSelect(currentMode agent.PermissionMode) string {
 	var sb strings.Builder

@@ -3,12 +3,19 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"iroha/pkg/llm"
 
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/anthropic"
+	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -49,6 +56,9 @@ var Bridge = &ConfirmationBridge{
 	ResponseChan: make(chan string, 1),
 	CancelChan:   make(chan struct{}),
 }
+
+// GlobalSessionService is the persistent session store wrapper singleton.
+var GlobalSessionService *PersistentSessionService
 
 // ToolStatus represents the real-time execution state of a tool
 type ToolStatus struct {
@@ -107,9 +117,36 @@ type CustomRunner struct {
 }
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string) (*CustomRunner, error) {
-	// 1. Create our abstract model adapter
+	// 1. Initialize Google Genkit Go SDK Registry & Plugins based on active provider
+	var g *genkit.Genkit
+	if provider != llm.ProviderSimulate {
+		ctx := context.Background()
+		var plugins []api.Plugin
+
+		switch provider {
+		case llm.ProviderGemini:
+			plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
+		case llm.ProviderClaude:
+			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
+		case llm.ProviderGLM, llm.ProviderOpenAI, llm.ProviderDeepSeek, llm.ProviderKimi, llm.ProviderSiliconFlow:
+			oai := &compat_oai.OpenAICompatible{
+				Provider: string(provider),
+				APIKey:   apiKey,
+				BaseURL:  baseURL,
+			}
+			// Explicitly register model for OpenAI-compatible dynamic schemas
+			oai.DefineModel(string(provider), modelName, ai.ModelOptions{
+				Supports: &compat_oai.BasicText,
+			})
+			plugins = append(plugins, oai)
+		}
+
+		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	}
+
+	// 2. Create our abstract model adapter
 	systemPrompt := buildSystemPrompt()
-	modelAdapter, err := llm.NewAdapter(provider, modelName, apiKey, baseURL, systemPrompt, runnerHooks{})
+	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, runnerHooks{})
 	if err != nil {
 		return nil, fmt.Errorf("创建模型适配器失败: %w", err)
 	}
@@ -150,14 +187,20 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		return nil, fmt.Errorf("创建 Agent 失败: %w", err)
 	}
 
-	// 5. Create in-memory session service
-	sessionService := session.InMemoryService()
+	// 5. Create persistent session service
+	inMem := session.InMemoryService()
+	GlobalSessionService = NewPersistentSessionService(inMem, GetSessionsDir())
+
+	// Pre-load all sessions from disk
+	if err := GlobalSessionService.LoadSessions(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 恢复历史会话失败: %v\n", err)
+	}
 
 	// 6. Create ADK Runner
 	adkRunner, err := runner.New(runner.Config{
 		AppName:           "iroha",
 		Agent:             rootAgent,
-		SessionService:    sessionService,
+		SessionService:    GlobalSessionService,
 		AutoCreateSession: true,
 	})
 	if err != nil {

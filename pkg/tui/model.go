@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 	"google.golang.org/adk/session"
 )
 
@@ -27,6 +28,7 @@ const (
 	stateStreaming
 	stateConfirming
 	statePermissionSelect
+	stateSessionSelect
 )
 
 // Custom Message Types for Concurrency
@@ -67,6 +69,7 @@ var AllSlashCommands = []SlashMenuItem{
 	{"/worktree", "查看 Git Worktree 隔离状态"},
 	{"/mcp", "查看 MCP 插件状态"},
 	{"/bg", "查看后台任务状态"},
+	{"/sessions", "查看和切换会话历史"},
 	{"/exit", "退出程序"},
 }
 
@@ -119,6 +122,13 @@ type Model struct {
 	// Confirm card selection index (0: Y, 1: N, 2: A)
 	ConfirmSelectIndex int
 
+	// Session management
+	SessionID            string
+	StartInSessionPicker bool
+	SessionsList         []agent.SessionMetadata
+	SessionListIndex     int
+	PrevState            TuiState
+
 	// Callback closures to avoid nil pointer program issues
 	OnEvent func(*session.Event)
 	OnError func(error)
@@ -139,7 +149,7 @@ func SetupTextArea() textarea.Model {
 	return ta
 }
 
-func NewModel(runner *agent.CustomRunner) Model {
+func NewModel(runner *agent.CustomRunner, sessionID string, startInSessionPicker bool) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = StyleThinking
@@ -152,18 +162,24 @@ func NewModel(runner *agent.CustomRunner) Model {
 	vp.SetContent("Welcome to Iroha.")
 
 	m := Model{
-		State:            statePermissionSelect,
-		TextArea:         ta,
-		Viewport:         vp,
-		Spinner:          s,
-		HistoryManager:   NewHistoryManager(),
-		History:          make([]string, 0),
-		Runner:           runner,
-		Ctx:              ctx,
-		Cancel:           cancel,
-		ProgramRef:       pref,
-		SessionStartTime: time.Now(),
-		PermSelectIndex:  1, // Default to "default" mode (index 1)
+		State:                statePermissionSelect,
+		TextArea:             ta,
+		Viewport:             vp,
+		Spinner:              s,
+		HistoryManager:       NewHistoryManager(),
+		History:              make([]string, 0),
+		Runner:               runner,
+		Ctx:                  ctx,
+		Cancel:               cancel,
+		ProgramRef:           pref,
+		SessionStartTime:     time.Now(),
+		PermSelectIndex:      1, // Default to "default" mode (index 1)
+		SessionID:            sessionID,
+		StartInSessionPicker: startInSessionPicker,
+	}
+
+	if sessionID != "" && !startInSessionPicker {
+		m.LoadHistoryFromSession(sessionID)
 	}
 
 	m.OnEvent = func(ev *session.Event) {
@@ -254,8 +270,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyEnter:
 				_ = agent.GlobalPermissionManager.SetMode(permModes[m.PermSelectIndex])
+				if m.StartInSessionPicker {
+					m.PrevState = statePrompt
+					m.State = stateSessionSelect
+					m.loadSessionsList()
+				} else {
+					m.State = statePrompt
+				}
+				m.Viewport.SetContent(m.renderViewportContent())
+				return m, nil
+			case tea.KeyCtrlC:
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Handle session selection state
+		if m.State == stateSessionSelect {
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.SessionListIndex > 0 {
+					m.SessionListIndex--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.SessionListIndex < len(m.SessionsList) {
+					m.SessionListIndex++
+				}
+				return m, nil
+			case tea.KeyEscape:
+				m.State = m.PrevState
+				m.Viewport.SetContent(m.renderViewportContent())
+				return m, nil
+			case tea.KeyEnter:
+				if m.SessionListIndex == 0 {
+					// Start New Session
+					newID := uuid.New().String()
+					m.SessionID = newID
+					m.History = nil
+					m.TotalTokens = 0
+				} else {
+					// Switch to selected session
+					sel := m.SessionsList[m.SessionListIndex-1]
+					m.SessionID = sel.ID
+					m.LoadHistoryFromSession(sel.ID)
+				}
 				m.State = statePrompt
 				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
 				return m, nil
 			case tea.KeyCtrlC:
 				return m, tea.Quit
@@ -687,6 +749,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.TextArea.SetHeight(2)
 						return m, nil
 					}
+
+					if cmdName == "/sessions" {
+						m.HistoryManager.Add(inputVal)
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
+						m.PrevState = m.State
+						m.State = stateSessionSelect
+						m.loadSessionsList()
+						m.Viewport.SetContent(m.renderViewportContent())
+						return m, nil
+					}
 					if cmdName == "/permission" {
 						m.HistoryManager.Add(inputVal)
 						userLog := StyleUserMsg.Render("> " + inputVal)
@@ -745,7 +818,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Cancel = cancel
 
 				// Trigger execution with our registered closures
-				m.Runner.Execute(m.Ctx, "user-dev", "session-default", m.CurrentPrompt,
+				m.Runner.Execute(m.Ctx, "user-dev", m.SessionID, m.CurrentPrompt,
 					m.OnEvent, m.OnError, m.OnDone,
 				)
 
@@ -987,6 +1060,11 @@ func (m Model) View() string {
 		return RenderPermissionSelectScreen(m)
 	}
 
+	// Full-screen session selection
+	if m.State == stateSessionSelect {
+		return RenderSessionSelectScreen(m)
+	}
+
 	var sb strings.Builder
 
 	// Viewport taking up top space
@@ -1043,5 +1121,97 @@ func (m *Model) updateSlashMenu(input string) {
 	}
 	if m.SlashMenuIndex < 0 {
 		m.SlashMenuIndex = 0
+	}
+}
+
+func (m *Model) loadSessionsList() {
+	if agent.GlobalSessionService != nil {
+		list, err := agent.GlobalSessionService.ListSavedSessions()
+		if err == nil {
+			m.SessionsList = list
+			// Reset session list picker index if out of bounds
+			if m.SessionListIndex > len(list) {
+				m.SessionListIndex = len(list)
+			}
+			if m.SessionListIndex < 0 {
+				m.SessionListIndex = 0
+			}
+		}
+	}
+}
+
+func (m *Model) LoadHistoryFromSession(sessionID string) {
+	m.History = nil
+	if agent.GlobalSessionService == nil {
+		return
+	}
+	resp, err := agent.GlobalSessionService.Get(context.Background(), &session.GetRequest{
+		SessionID: sessionID,
+	})
+	if err != nil || resp.Session == nil {
+		return
+	}
+
+	var events []*session.Event
+	if resp.Session.Events() != nil {
+		for ev := range resp.Session.Events().All() {
+			events = append(events, ev)
+		}
+	}
+
+	type turn struct {
+		prompt   string
+		response string
+	}
+	var turns []turn
+	var currentTurn *turn
+
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if ev.Content != nil {
+			var promptParts []string
+			for _, part := range ev.Content.Parts {
+				if part.Text != "" {
+					promptParts = append(promptParts, part.Text)
+				}
+			}
+			if len(promptParts) > 0 {
+				pText := strings.Join(promptParts, "\n")
+				if currentTurn != nil {
+					turns = append(turns, *currentTurn)
+				}
+				currentTurn = &turn{
+					prompt: pText,
+				}
+			}
+		}
+
+		if ev.LLMResponse.Content != nil {
+			var respParts []string
+			for _, part := range ev.LLMResponse.Content.Parts {
+				if part.Text != "" {
+					respParts = append(respParts, part.Text)
+				}
+			}
+			if len(respParts) > 0 {
+				rText := strings.Join(respParts, "")
+				if currentTurn == nil {
+					currentTurn = &turn{}
+				}
+				currentTurn.response += rText
+			}
+		}
+	}
+
+	if currentTurn != nil {
+		turns = append(turns, *currentTurn)
+	}
+
+	for _, t := range turns {
+		userLog := StyleUserMsg.Render("> " + t.prompt)
+		agentLog := StyleAgentMsg.Render(RenderMarkdown(t.response))
+		m.History = append(m.History, userLog, agentLog)
 	}
 }

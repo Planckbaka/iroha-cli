@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -11,15 +12,20 @@ import (
 	"iroha/pkg/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 func main() {
 	// 1. Parse command-line flags
-	providerFlag := flag.String("provider", "", "LLM 提供商: simulate, gemini, claude, openai, glm")
+	providerFlag := flag.String("provider", "", "LLM 提供商: simulate, gemini, claude, openai, glm, deepseek, kimi, siliconflow")
 	modelFlag := flag.String("model", "", "模型名称 (如 gemini-2.5-flash, glm-4, gpt-4o)")
 	apiKeyFlag := flag.String("apikey", "", "LLM API Key")
 	baseURLFlag := flag.String("baseurl", "", "自定义 API Base URL (例如 https://api.openai.com/v1)")
 	forceConfigFlag := flag.Bool("config", false, "强制启动交互式配置向导")
+	resumeFlag := flag.Bool("resume", false, "打开 TUI 交互式历史会话选择器")
+	lastFlag := flag.Bool("last", false, "自动恢复最近一次活跃的会话")
+	sessionFlag := flag.String("session", "", "恢复指定的会话 ID")
+	forkFlag := flag.String("fork", "", "复制指定的历史会话并作为一个新的分支启动")
 	flag.Parse()
 
 	// Track which flags were explicitly set
@@ -109,8 +115,40 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 4.5. Resolve Session ID based on CLI flags
+	sessionID := ""
+	startInSessionPicker := false
+
+	if *resumeFlag {
+		startInSessionPicker = true
+	} else if *lastFlag {
+		metaList, err := agent.GlobalSessionService.ListSavedSessions()
+		if err == nil && len(metaList) > 0 {
+			sessionID = metaList[0].ID
+			fmt.Printf("自动恢复最近一次活跃会话: %s (标题: %s)\n", sessionID, metaList[0].FirstPrompt)
+		} else {
+			fmt.Println("未找到历史活跃会话，将启动新会话。")
+		}
+	} else if *sessionFlag != "" {
+		sessionID = *sessionFlag
+	} else if *forkFlag != "" {
+		originalID := *forkFlag
+		newID := uuid.New().String()
+		err := agent.GlobalSessionService.ForkSession(context.Background(), originalID, newID)
+		if err != nil {
+			fmt.Printf("\x1b[31m[复制会话失败] %v\x1b[0m\n", err)
+			os.Exit(1)
+		}
+		sessionID = newID
+		fmt.Printf("已从会话 %s 复制并创建新分支会话: %s\n", originalID, sessionID)
+	}
+
+	if sessionID == "" && !startInSessionPicker {
+		sessionID = uuid.New().String()
+	}
+
 	// 5. Create the TUI model
-	m := tui.NewModel(runner)
+	m := tui.NewModel(runner, sessionID, startInSessionPicker)
 
 	// 6. Create the Bubble Tea Program
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

@@ -18,9 +18,12 @@ type ProviderDefaultConfig struct {
 
 // ProviderDefaults maps provider names to their default configuration values
 var ProviderDefaults = map[string]ProviderDefaultConfig{
-	"glm":    {Model: "glm-4", BaseURL: "https://open.bigmodel.cn/api/paas/v4", EnvKey: "ZHIPU_API_KEY"},
-	"openai": {Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", EnvKey: "OPENAI_API_KEY"},
-	"claude": {Model: "claude-sonnet-4-6", BaseURL: "https://api.anthropic.com", EnvKey: "ANTHROPIC_API_KEY"},
+	"glm":         {Model: "glm-4", BaseURL: "https://open.bigmodel.cn/api/paas/v4", EnvKey: "ZHIPU_API_KEY"},
+	"openai":      {Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", EnvKey: "OPENAI_API_KEY"},
+	"claude":      {Model: "claude-sonnet-4-6", BaseURL: "https://api.anthropic.com", EnvKey: "ANTHROPIC_API_KEY"},
+	"deepseek":    {Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1", EnvKey: "DEEPSEEK_API_KEY"},
+	"kimi":        {Model: "kimi-k2.6", BaseURL: "https://api.moonshot.cn/v1", EnvKey: "MOONSHOT_API_KEY"},
+	"siliconflow": {Model: "deepseek-ai/DeepSeek-V3", BaseURL: "https://api.siliconflow.cn/v1", EnvKey: "SILICONFLOW_API_KEY"},
 }
 
 // DefaultProviderConfig returns the ProviderDefaultConfig for a given provider,
@@ -88,6 +91,12 @@ func LoadConfig() (*Config, error) {
 			cfg.Provider = "openai"
 		} else if strings.HasPrefix(cfg.Model, "claude") {
 			cfg.Provider = "claude"
+		} else if strings.HasPrefix(cfg.Model, "siliconflow") || strings.Contains(cfg.Model, "deepseek-ai/") {
+			cfg.Provider = "siliconflow"
+		} else if strings.HasPrefix(cfg.Model, "deepseek") {
+			cfg.Provider = "deepseek"
+		} else if strings.HasPrefix(cfg.Model, "kimi") || strings.HasPrefix(cfg.Model, "moonshot") {
+			cfg.Provider = "kimi"
 		}
 		if cfg.Provider != "" {
 			fmt.Printf("  从模型名称 '%s' 推断 provider='%s'。使用 --provider 标志覆盖。\n", cfg.Model, cfg.Provider)
@@ -128,13 +137,15 @@ func RunConfigWizard() (*Config, error) {
 
 	// 1. Choose Provider
 	fmt.Println("  \x1b[36m1. 选择大模型提供商 (LLM Provider):\x1b[0m")
-	fmt.Println("     [s] simulate  - 本地高仿真离线沙箱模拟 (免 Key / 无网可用)")
-	fmt.Println("     [g] glm       - 智谱 AI GLM-4 官方 API")
-	fmt.Println("     [o] openai    - OpenAI 官方或任何兼容第三方 API (DeepSeek/Qwen/Ollama)")
+	fmt.Println("     [s] simulate    - 本地高仿真离线沙箱模拟 (免 Key / 无网可用)")
+	fmt.Println("     [g] glm         - 智谱 AI GLM-4 官方 API")
+	fmt.Println("     [o] openai      - OpenAI 官方或任何兼容第三方 API (Ollama/本地模型)")
+	fmt.Println("     [c] claude      - Anthropic Claude 官方 API")
+	fmt.Println("     [d] deepseek    - DeepSeek 官方 API")
+	fmt.Println("     [k] kimi        - Moonshot Kimi 官方 API")
+	fmt.Println("     [f] siliconflow - SiliconFlow (硅基流动) API (极速部署 DeepSeek V3/R1)")
 	fmt.Printf("     当前选择: \x1b[33m%s\x1b[0m\n", existing.Provider)
-	fmt.Println("     [c] claude    - Anthropic Claude 官方 API")
-
-	fmt.Print("     选择提供商 (s/g/o/c) [回车不修改]: ")
+	fmt.Print("     选择提供商 (s/g/o/c/d/k/f) [回车不修改]: ")
 	providerInput, _ := reader.ReadString('\n')
 	providerInput = strings.TrimSpace(strings.ToLower(providerInput))
 
@@ -147,6 +158,12 @@ func RunConfigWizard() (*Config, error) {
 		provider = "openai"
 	} else if providerInput == "c" || providerInput == "claude" {
 		provider = "claude"
+	} else if providerInput == "d" || providerInput == "deepseek" {
+		provider = "deepseek"
+	} else if providerInput == "k" || providerInput == "kimi" {
+		provider = "kimi"
+	} else if providerInput == "f" || providerInput == "siliconflow" {
+		provider = "siliconflow"
 	}
 
 	// 2. Determine default model and base URL based on provider

@@ -27,7 +27,7 @@ func TestRenderConfirmCard(t *testing.T) {
 }
 
 func TestModelConfirmNavigation(t *testing.T) {
-	m := NewModel(nil)
+	m := NewModel(nil, "test-session", false)
 	m.State = stateConfirming
 	m.ConfirmSelectIndex = 0
 
