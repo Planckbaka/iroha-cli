@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>go-claude</strong>
+  <strong>iroha code</strong>
   <br>
   <em>An interactive AI agent CLI powered by Zhipu GLM-4 / OpenAI</em>
 </p>
@@ -22,7 +22,7 @@
 
 ---
 
-> **Naming note:** The project module is **go-claude**, the GitHub repository is **iroha-cli**, and the compiled binary is **agent-cli**. They all refer to the same project.
+> **Naming note:** The project module is **iroha**, the GitHub repository is **iroha-cli**, and the compiled binary is **iroha**. They all refer to the same project.
 
 ## Features
 
@@ -51,13 +51,13 @@ Download the latest release for your platform from the [Releases page](https://g
 On first run with an online provider, the interactive setup wizard launches automatically:
 
 ```bash
-agent-cli --provider glm --model glm-4
+./iroha --provider glm --model glm-4
 ```
 
 Or configure manually:
 
 ```bash
-agent-cli --config
+./iroha --config
 ```
 
 Supported environment variables: `ZHIPU_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
@@ -67,7 +67,7 @@ Supported environment variables: `ZHIPU_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_A
 No API key needed — run in simulation mode:
 
 ```bash
-agent-cli
+./iroha
 ```
 
 ### Slash Commands
@@ -104,10 +104,19 @@ pkg/llm  pkg/tui pkg/config
 
 <!-- Add TUI screenshots here -->
 ```
-  go-claude AI Agent CLI (v1.3.0)
-  Model: glm-4 | Mode: default | Session: session-default
+   ___   ____     ___    _   _    _    
+  |_ _| |  _ \   / _ \  | | | |  / \   
+   | |  | |_) | | | | | | |_| | / _ \  
+   | |  |  _ <  | |_| | |  _  |/ ___ \ 
+  |___| |_| \_\  \___/  |_| |_/_/   \_\
 
-  Use Up/Down to cycle history. Type /exit or Ctrl+C to quit.
+  [Iroha] 呼……刚结束打工！今天也来帮你写代码啦，我们开始吧！
+
+  brand  iroha code  v1.3.0
+  model  glm-4
+  mode   default
+
+  输入 / 查看所有命令   Up/Down — 历史记录   /exit — 退出
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   > help me refactor the authentication module

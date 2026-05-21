@@ -295,14 +295,11 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 		line := scanner.Text()
 		lineCount++
 		if lineCount <= maxStreamLines {
-			select {
-			case ToolBridge.StatusChan <- ToolStatus{
+			ToolBridge.Send(ToolStatus{
 				Name:        "shell_run",
 				Running:     true,
 				StreamLines: []string{line},
-			}:
-			default:
-			}
+			})
 		}
 	}
 

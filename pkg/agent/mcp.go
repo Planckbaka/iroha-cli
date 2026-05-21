@@ -110,7 +110,7 @@ func (c *MCPClient) Start() error {
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]any{
-			"name":    "go-claude-client",
+			"name":    "iroha-client",
 			"version": "1.0.0",
 		},
 	}
@@ -305,7 +305,17 @@ func (r *MCPToolRouter) LoadAndStartPlugins() error {
 		wd = "."
 	}
 	root := findProjectRoot(wd)
-	cfgPath := filepath.Join(root, ".go-claude", "plugins.json")
+	cfgPath := filepath.Join(root, ".iroha", "plugins.json")
+	oldCfgPath := filepath.Join(root, ".go-claude", "plugins.json")
+
+	// Migration logic for local plugins
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		if oldData, oldErr := os.ReadFile(oldCfgPath); oldErr == nil {
+			_ = os.MkdirAll(filepath.Dir(cfgPath), 0755)
+			_ = os.WriteFile(cfgPath, oldData, 0644)
+			_ = os.Rename(oldCfgPath, oldCfgPath+".bak")
+		}
+	}
 
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {

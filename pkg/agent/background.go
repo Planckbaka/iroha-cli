@@ -56,9 +56,32 @@ func NewBackgroundManager() *BackgroundManager {
 	dir := filepath.Join(cwd, ".runtime-tasks")
 	_ = os.MkdirAll(dir, 0755)
 
-	return &BackgroundManager{
+	bm := &BackgroundManager{
 		tasks: make(map[string]*BackgroundTask),
 		dir:   dir,
+	}
+	bm.loadPersistedTasks()
+	return bm
+}
+
+func (bm *BackgroundManager) loadPersistedTasks() {
+	files, err := os.ReadDir(bm.dir)
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(bm.dir, file.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var t BackgroundTask
+		if err := json.Unmarshal(data, &t); err == nil {
+			bm.tasks[t.ID] = &t
+		}
 	}
 }
 

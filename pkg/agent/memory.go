@@ -60,11 +60,11 @@ type MemoryEntry struct {
 //
 // Storage layout (two layers, project takes priority):
 //
-//	~/.go-claude/memory/        global memories
+//	~/.iroha/memory/        global memories
 //	  MEMORY.md                 index file (auto-generated)
 //	  prefer_pnpm.md            one .md per entry
 //
-//	./.go-claude/memory/        project-level memories (merged on top)
+//	./.iroha/memory/        project-level memories (merged on top)
 //	  MEMORY.md
 //	  no_snapshot_edits.md
 //
@@ -107,11 +107,45 @@ func (mm *MemoryManager) Reload() {
 func (mm *MemoryManager) load() {
 	// Layer 1: global memories
 	if home, err := os.UserHomeDir(); err == nil {
-		mm.loadDir(filepath.Join(home, ".go-claude", "memory"))
+		globalIrohaDir := filepath.Join(home, ".iroha", "memory")
+		globalGoClaudeDir := filepath.Join(home, ".go-claude", "memory")
+		if _, err := os.Stat(globalIrohaDir); os.IsNotExist(err) {
+			if _, oldErr := os.Stat(globalGoClaudeDir); oldErr == nil {
+				_ = os.MkdirAll(globalIrohaDir, 0755)
+				if files, readErr := os.ReadDir(globalGoClaudeDir); readErr == nil {
+					for _, f := range files {
+						oldFile := filepath.Join(globalGoClaudeDir, f.Name())
+						newFile := filepath.Join(globalIrohaDir, f.Name())
+						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
+							_ = os.WriteFile(newFile, data, 0644)
+						}
+					}
+					_ = os.Rename(globalGoClaudeDir, globalGoClaudeDir+".bak")
+				}
+			}
+		}
+		mm.loadDir(globalIrohaDir)
 	}
 	// Layer 2: project memories (merged on top; same name overwrites global)
 	if cwd, err := os.Getwd(); err == nil {
-		mm.loadDir(filepath.Join(cwd, ".go-claude", "memory"))
+		projectIrohaDir := filepath.Join(cwd, ".iroha", "memory")
+		projectGoClaudeDir := filepath.Join(cwd, ".go-claude", "memory")
+		if _, err := os.Stat(projectIrohaDir); os.IsNotExist(err) {
+			if _, oldErr := os.Stat(projectGoClaudeDir); oldErr == nil {
+				_ = os.MkdirAll(projectIrohaDir, 0755)
+				if files, readErr := os.ReadDir(projectGoClaudeDir); readErr == nil {
+					for _, f := range files {
+						oldFile := filepath.Join(projectGoClaudeDir, f.Name())
+						newFile := filepath.Join(projectIrohaDir, f.Name())
+						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
+							_ = os.WriteFile(newFile, data, 0644)
+						}
+					}
+					_ = os.Rename(projectGoClaudeDir, projectGoClaudeDir+".bak")
+				}
+			}
+		}
+		mm.loadDir(projectIrohaDir)
 	}
 }
 
@@ -334,11 +368,11 @@ func slugify(s string) string {
 	return s
 }
 
-// projectMemoryDir returns ./.go-claude/memory (creating if needed).
+// projectMemoryDir returns ./.iroha/memory (creating if needed).
 func projectMemoryDir() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cwd, ".go-claude", "memory"), nil
+	return filepath.Join(cwd, ".iroha", "memory"), nil
 }

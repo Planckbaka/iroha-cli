@@ -183,8 +183,21 @@ func init() {
 
 func NewCronScheduler() *CronScheduler {
 	cwd, _ := os.Getwd()
-	dir := filepath.Join(cwd, ".go-claude")
+	dir := filepath.Join(cwd, ".iroha")
+	oldDir := filepath.Join(cwd, ".go-claude")
 	_ = os.MkdirAll(dir, 0755)
+
+	// Migration logic for cron scheduled_tasks.json
+	newTasksPath := filepath.Join(dir, "scheduled_tasks.json")
+	oldTasksPath := filepath.Join(oldDir, "scheduled_tasks.json")
+	if _, err := os.Stat(newTasksPath); os.IsNotExist(err) {
+		if _, oldErr := os.Stat(oldTasksPath); oldErr == nil {
+			if data, copyErr := os.ReadFile(oldTasksPath); copyErr == nil {
+				_ = os.WriteFile(newTasksPath, data, 0644)
+			}
+			_ = os.Rename(oldTasksPath, oldTasksPath+".bak")
+		}
+	}
 
 	lockPath := filepath.Join(dir, "cron.lock")
 
@@ -334,11 +347,17 @@ func (cs *CronScheduler) DetectMissedTasks() []ScheduledNotification {
 	var missed []ScheduledNotification
 
 	for _, t := range cs.tasks {
-		if !t.Durable || t.LastFiredAt == 0 {
+		if !t.Durable {
 			continue
 		}
 
-		lastDt := time.Unix(t.LastFiredAt, 0)
+		var lastDt time.Time
+		if t.LastFiredAt > 0 {
+			lastDt = time.Unix(t.LastFiredAt, 0)
+		} else {
+			lastDt = t.CreatedAt
+		}
+
 		check := lastDt.Add(time.Minute)
 		capTime := now
 		if now.Sub(lastDt) > 24*time.Hour {

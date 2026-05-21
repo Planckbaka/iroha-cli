@@ -77,14 +77,14 @@ func TestMCPClient_Lifecycle(t *testing.T) {
 }
 
 func TestMCPToolRouter_DiscoveryAndRouting(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "go-claude-mcp-test")
+	tempDir, err := os.MkdirTemp("", "iroha-mcp-test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	// Set up project root mock files
-	goClaudeDir := filepath.Join(tempDir, ".go-claude")
+	goClaudeDir := filepath.Join(tempDir, ".iroha")
 	_ = os.MkdirAll(goClaudeDir, 0755)
 
 	pluginsJson := fmt.Sprintf(`{
@@ -151,7 +151,7 @@ func TestMCPToolRouter_DiscoveryAndRouting(t *testing.T) {
 }
 
 func TestMCPToolRouter_GenerateDefaultConfig(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "go-claude-mcp-default-test")
+	tempDir, err := os.MkdirTemp("", "iroha-mcp-default-test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestMCPToolRouter_GenerateDefaultConfig(t *testing.T) {
 	// Calling LoadAndStartPlugins should generate plugins.json
 	_ = router.LoadAndStartPlugins()
 
-	cfgPath := filepath.Join(tempDir, ".go-claude", "plugins.json")
+	cfgPath := filepath.Join(tempDir, ".iroha", "plugins.json")
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		t.Fatalf("expected plugins.json to be generated, but it was not")
 	}

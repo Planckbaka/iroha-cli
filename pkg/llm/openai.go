@@ -455,17 +455,14 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 						},
 					},
 					Partial:      false,
-					TurnComplete: false,
+					TurnComplete: true, // Directly mark final!
 				}, nil) {
 					return
 				}
 
 				currentToolName = ""
 				currentToolArgs.Reset()
-
-				if choice.FinishReason != "tool_calls" {
-					sentFinal = true
-				}
+				sentFinal = true // Mark final sent, prevent subsequent empty text injection!
 				continue
 			}
 
@@ -527,10 +524,11 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 					},
 				},
 				Partial:      false,
-				TurnComplete: false,
+				TurnComplete: true, // Mark final on flush!
 			}, nil) {
 				return
 			}
+			sentFinal = true
 		}
 
 		// Guarantee a final response is always sent — prevents ADK

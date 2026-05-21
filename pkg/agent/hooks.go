@@ -63,8 +63,8 @@ type HookResult struct {
 //
 // Config is loaded from two layers (merged in order):
 //
-//	~/.go-claude/hooks.json  (global)
-//	./.go-claude/hooks.json  (project, takes priority)
+//	~/.iroha/hooks.json  (global)
+//	./.iroha/hooks.json  (project, takes priority)
 //
 // The exit-code protocol mirrors the s08 spec:
 //
@@ -104,11 +104,33 @@ func (hm *HookManager) Reload() {
 func (hm *HookManager) load() {
 	// Layer 1: global config
 	if home, err := os.UserHomeDir(); err == nil {
-		hm.loadFile(filepath.Join(home, ".go-claude", "hooks.json"))
+		globalIrohaPath := filepath.Join(home, ".iroha", "hooks.json")
+		globalGoClaudePath := filepath.Join(home, ".go-claude", "hooks.json")
+		if _, err := os.Stat(globalIrohaPath); os.IsNotExist(err) {
+			if _, oldErr := os.Stat(globalGoClaudePath); oldErr == nil {
+				_ = os.MkdirAll(filepath.Dir(globalIrohaPath), 0755)
+				if data, copyErr := os.ReadFile(globalGoClaudePath); copyErr == nil {
+					_ = os.WriteFile(globalIrohaPath, data, 0644)
+					_ = os.Rename(globalGoClaudePath, globalGoClaudePath+".bak")
+				}
+			}
+		}
+		hm.loadFile(globalIrohaPath)
 	}
 	// Layer 2: project config (merged on top, same-event hooks are appended)
 	if cwd, err := os.Getwd(); err == nil {
-		hm.loadFile(filepath.Join(cwd, ".go-claude", "hooks.json"))
+		projectIrohaPath := filepath.Join(cwd, ".iroha", "hooks.json")
+		projectGoClaudePath := filepath.Join(cwd, ".go-claude", "hooks.json")
+		if _, err := os.Stat(projectIrohaPath); os.IsNotExist(err) {
+			if _, oldErr := os.Stat(projectGoClaudePath); oldErr == nil {
+				_ = os.MkdirAll(filepath.Dir(projectIrohaPath), 0755)
+				if data, copyErr := os.ReadFile(projectGoClaudePath); copyErr == nil {
+					_ = os.WriteFile(projectIrohaPath, data, 0644)
+					_ = os.Rename(projectGoClaudePath, projectGoClaudePath+".bak")
+				}
+			}
+		}
+		hm.loadFile(projectIrohaPath)
 	}
 }
 

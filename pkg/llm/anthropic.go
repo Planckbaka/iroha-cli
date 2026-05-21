@@ -410,13 +410,14 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 							},
 						},
 						Partial:      false,
-						TurnComplete: false,
+						TurnComplete: true, // Directly mark final!
 					}, nil) {
 						return
 					}
 
 					currentToolName = ""
 					toolInputParts = nil
+					sentFinal = true // Mark final sent, prevent subsequent empty text injection!
 				}
 
 			case "message_delta":

@@ -15,7 +15,7 @@ func writeHooksConfig(t *testing.T, dir string, cfg HookConfig) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hooksDir := filepath.Join(dir, ".go-claude")
+	hooksDir := filepath.Join(dir, ".iroha")
 	if err := os.MkdirAll(hooksDir, 0755); err != nil {
 		t.Fatal(err)
 	}

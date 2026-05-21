@@ -159,3 +159,43 @@ func TestCronSchedulerMissedTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestCronSchedulerMissedTasks_NewTask(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cron-missed-new-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	sched := &CronScheduler{
+		dir:      tempDir,
+		lock:     NewCronLock(filepath.Join(tempDir, "cron.lock")),
+		stopChan: make(chan struct{}),
+	}
+
+	now := time.Now()
+	// Created 10 minutes ago, never fired (LastFiredAt is 0)
+	createdAt := now.Add(-10 * time.Minute)
+
+	task := &ScheduledTask{
+		ID:          "newtask1",
+		Cron:        "*/5 * * * *", // should fire every 5 minutes
+		Prompt:      "New Missed job",
+		Recurring:   true,
+		Durable:     true,
+		CreatedAt:   createdAt,
+		LastFiredAt: 0,
+	}
+	sched.tasks = append(sched.tasks, task)
+
+	// DetectMissedTasks should fallback to CreatedAt and detect missed events
+	missed := sched.DetectMissedTasks()
+
+	if len(missed) != 1 {
+		t.Errorf("expected 1 missed notification by falling back to CreatedAt, got %d", len(missed))
+	} else {
+		if missed[0].ScheduleID != "newtask1" {
+			t.Errorf("expected schedule ID 'newtask1', got %s", missed[0].ScheduleID)
+		}
+	}
+}

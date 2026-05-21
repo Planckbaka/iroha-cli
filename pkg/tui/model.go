@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"go-claude/pkg/agent"
+	"iroha/pkg/agent"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -116,6 +116,9 @@ type Model struct {
 	// Startup permission selection
 	PermSelectIndex int
 
+	// Confirm card selection index (0: Y, 1: N, 2: A)
+	ConfirmSelectIndex int
+
 	// Callback closures to avoid nil pointer program issues
 	OnEvent func(*session.Event)
 	OnError func(error)
@@ -146,7 +149,7 @@ func NewModel(runner *agent.CustomRunner) Model {
 
 	ta := SetupTextArea()
 	vp := viewport.New(100, 20)
-	vp.SetContent("Welcome to go-claude.")
+	vp.SetContent("Welcome to Iroha.")
 
 	m := Model{
 		State:            statePermissionSelect,
@@ -264,6 +267,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle confirmation state FIRST — before any TextArea processing
 		if m.State == stateConfirming {
 			keyStr := strings.ToLower(msg.String())
+			switch msg.Type {
+			case tea.KeyLeft:
+				m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil
+			case tea.KeyRight:
+				m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil
+			case tea.KeyTab:
+				m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil
+			case tea.KeyShiftTab:
+				m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil
+			case tea.KeyEnter:
+				m.State = stateThinking
+				var resp string
+				switch m.ConfirmSelectIndex {
+				case 0:
+					resp = "y"
+				case 1:
+					resp = "n"
+				case 2:
+					resp = "always"
+				}
+				agent.Bridge.ResponseChan <- resp
+				return m, m.listenToConfirmationBridge()
+			}
+
 			switch keyStr {
 			case "y":
 				m.State = stateThinking
@@ -277,6 +316,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.State = stateThinking
 				agent.Bridge.ResponseChan <- "always"
 				return m, m.listenToConfirmationBridge()
+			case "shift+tab":
+				m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil
 			default:
 				return m, nil
 			}
@@ -292,6 +336,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+
+		case tea.KeyPgUp:
+			m.Viewport.HalfPageUp()
+			return m, nil
+
+		case tea.KeyPgDown:
+			m.Viewport.HalfPageDown()
+			return m, nil
 
 		case tea.KeyUp:
 			if m.State == statePrompt && m.SlashMenuActive {
@@ -450,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if agent.GlobalHookManager.IsEmpty() {
 							sb.WriteString(StyleKeyActive.Render("Hooks") + "\n")
 							sb.WriteString("  " + StyleKeyHelp.Render("no hooks registered") + "\n")
-							sb.WriteString("  " + StyleKeyHelp.Render("create .go-claude/hooks.json or ~/.go-claude/hooks.json") + "\n")
+							sb.WriteString("  " + StyleKeyHelp.Render("create .iroha/hooks.json or ~/.iroha/hooks.json") + "\n")
 						} else {
 							sb.WriteString(StyleKeyActive.Render("Hooks") + "\n")
 							if len(sources) > 0 {
@@ -765,6 +817,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConfirmationRequiredMsg:
 		m.State = stateConfirming
 		m.ConfirmationPrompt = msg.Prompt
+		m.ConfirmSelectIndex = 0
 		m.Viewport.SetContent(m.renderViewportContent())
 		m.Viewport.GotoBottom()
 		// IMPORTANT: Do NOT re-register listenToConfirmationBridge here.
@@ -803,6 +856,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if newVal != prevVal {
 			m.updateSlashMenu(newVal)
 		}
+
+		// Dynamic auto-scaling height of Textarea between 2 and 6 lines
+		numLines := len(strings.Split(newVal, "\n"))
+		h := numLines
+		if h < 2 {
+			h = 2
+		} else if h > 6 {
+			h = 6
+		}
+		if m.TextArea.Height() != h {
+			m.TextArea.SetHeight(h)
+			m.Viewport.Height = m.Height - h - 3
+			// Refresh viewport content styling
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+		}
+
 		return m, cmd
 	}
 
@@ -900,7 +970,7 @@ func (m *Model) renderViewportContent() string {
 			sb.WriteString("\n" + StyleAgentMsg.Render(m.Spinner.View()+StyleThinking.Render(" "+activity)))
 		}
 	case stateConfirming:
-		sb.WriteString("\n" + StyleAgentMsg.Render(RenderMarkdown(m.StreamedText)+"\n"+RenderConfirmCard(m.ConfirmationPrompt)))
+		sb.WriteString("\n" + StyleAgentMsg.Render(RenderMarkdown(m.StreamedText)+"\n"+RenderConfirmCard(m.ConfirmationPrompt, m.ConfirmSelectIndex)))
 	}
 
 	return sb.String()

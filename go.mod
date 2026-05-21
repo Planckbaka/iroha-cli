@@ -1,4 +1,4 @@
-module go-claude
+module iroha
 
 go 1.26.1
 

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const debugLogPath = "/tmp/go-claude-debug.log"
+const debugLogPath = "/tmp/iroha-debug.log"
 
 var (
 	debugMu   sync.Mutex
@@ -55,6 +55,6 @@ func DumpDebugFile(name string, data []byte) {
 	if !debugOn {
 		return
 	}
-	path := filepath.Join(filepath.Dir(debugLogPath), "go-claude-debug-"+name)
+	path := filepath.Join(filepath.Dir(debugLogPath), "iroha-debug-"+name)
 	os.WriteFile(path, data, 0644)
 }

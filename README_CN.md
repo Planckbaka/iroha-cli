@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>go-claude</strong>
+  <strong>iroha code</strong>
   <br>
   <em>基于智谱 GLM-4 / OpenAI 的交互式 AI 智能体命令行工具</em>
 </p>
@@ -22,7 +22,7 @@
 
 ---
 
-> **命名说明：** 项目模块名为 **go-claude**，GitHub 仓库为 **iroha-cli**，编译后的二进制文件为 **agent-cli**。它们指的是同一个项目。
+> **命名说明：** 项目模块名为 **iroha**，GitHub 仓库为 **iroha-cli**，编译后的二进制文件为 **iroha**。它们指的是同一个项目。
 
 ## 功能特性
 
@@ -51,13 +51,13 @@ go install github.com/Planckbaka/iroha-cli/cmd/agent-cli@latest
 首次使用在线提供商时，交互式配置向导会自动启动：
 
 ```bash
-agent-cli --provider glm --model glm-4
+./iroha --provider glm --model glm-4
 ```
 
 或手动配置：
 
 ```bash
-agent-cli --config
+./iroha --config
 ```
 
 支持的环境变量：`ZHIPU_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`GEMINI_API_KEY`
@@ -67,7 +67,7 @@ agent-cli --config
 无需 API Key — 以仿真模式运行：
 
 ```bash
-agent-cli
+./iroha
 ```
 
 ### 斜杠命令
@@ -104,10 +104,19 @@ pkg/llm  pkg/tui pkg/config
 
 <!-- 在此处添加 TUI 截图 -->
 ```
-  go-claude AI Agent CLI (v1.3.0)
-  Model: glm-4 | Mode: default | Session: session-default
+   ___   ____     ___    _   _    _    
+  |_ _| |  _ \   / _ \  | | | |  / \   
+   | |  | |_) | | | | | | |_| | / _ \  
+   | |  |  _ <  | |_| | |  _  |/ ___ \ 
+  |___| |_| \_\  \___/  |_| |_/_/   \_\
 
-  Use Up/Down to cycle history. Type /exit or Ctrl+C to quit.
+  [Iroha] 呼……刚结束打工！今天也来帮你写代码啦，我们开始吧！
+
+  brand  iroha code  v1.3.0
+  model  glm-4
+  mode   default
+
+  输入 / 查看所有命令   Up/Down — 历史记录   /exit — 退出
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   > 帮我重构认证模块

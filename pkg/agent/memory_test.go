@@ -47,8 +47,8 @@ func TestMemoryManager_FileIsWrittenToDisk(t *testing.T) {
 
 	_ = mm.Save("no_snapshot_edits", "Do not edit snapshots", MemTypeFeedback, "Never modify test snapshots unless asked.")
 
-	// The file should exist in .go-claude/memory/
-	expectedFile := filepath.Join(dir, ".go-claude", "memory", "no_snapshot_edits.md")
+	// The file should exist in .iroha/memory/
+	expectedFile := filepath.Join(dir, ".iroha", "memory", "no_snapshot_edits.md")
 	data, err := os.ReadFile(expectedFile)
 	if err != nil {
 		t.Fatalf("expected file %q to exist: %v", expectedFile, err)
@@ -72,7 +72,7 @@ func TestMemoryManager_IndexIsRebuilt(t *testing.T) {
 	_ = mm.Save("incident_board", "Incident dashboard URL", MemTypeReference, "https://dash.example.com/incidents")
 	_ = mm.Save("legacy_dir_constraint", "Legacy dir cannot be deleted", MemTypeProject, "deployment depends on it")
 
-	indexFile := filepath.Join(dir, ".go-claude", "memory", "MEMORY.md")
+	indexFile := filepath.Join(dir, ".iroha", "memory", "MEMORY.md")
 	data, err := os.ReadFile(indexFile)
 	if err != nil {
 		t.Fatalf("MEMORY.md not written: %v", err)

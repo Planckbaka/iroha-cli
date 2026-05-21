@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"go-claude/pkg/llm"
+	"iroha/pkg/llm"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -64,10 +64,40 @@ type ToolStatus struct {
 // ToolStatusBridge pipes tool status changes from the background runner to the foreground TUI
 type ToolStatusBridge struct {
 	StatusChan chan ToolStatus
+	mu         sync.Mutex
+	queue      []ToolStatus
+	active     bool
 }
 
 var ToolBridge = &ToolStatusBridge{
-	StatusChan: make(chan ToolStatus, 50),
+	StatusChan: make(chan ToolStatus, 100),
+}
+
+func (tb *ToolStatusBridge) Send(status ToolStatus) {
+	tb.mu.Lock()
+	tb.queue = append(tb.queue, status)
+	if !tb.active {
+		tb.active = true
+		go tb.drain()
+	}
+	tb.mu.Unlock()
+}
+
+func (tb *ToolStatusBridge) drain() {
+	for {
+		tb.mu.Lock()
+		if len(tb.queue) == 0 {
+			tb.active = false
+			tb.mu.Unlock()
+			return
+		}
+		status := tb.queue[0]
+		tb.queue = tb.queue[1:]
+		tb.mu.Unlock()
+
+		// Blocking send in background worker ensures 100% delivery and order preservation
+		tb.StatusChan <- status
+	}
 }
 
 
@@ -111,7 +141,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	}
 
 	rootAgent, err := llmagent.New(llmagent.Config{
-		Name:        "go-claude-agent",
+		Name:        "iroha-agent",
 		Instruction: instruction,
 		Model:       modelAdapter,
 		Tools:       wrappedTools,
@@ -126,7 +156,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	// 6. Create ADK Runner
 	adkRunner, err := runner.New(runner.Config{
-		AppName:           "go-claude",
+		AppName:           "iroha",
 		Agent:             rootAgent,
 		SessionService:    sessionService,
 		AutoCreateSession: true,
@@ -298,14 +328,11 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 			cmdStr = fmt.Sprintf("%v", m["command"])
 		}
 		// Send to TUI: AI reviewing...
-		select {
-		case ToolBridge.StatusChan <- ToolStatus{
+		ToolBridge.Send(ToolStatus{
 			Name:    "🤖 ai-review",
 			Args:    map[string]any{"command": cmdStr},
 			Running: true,
-		}:
-		default:
-		}
+		})
 
 		reviewResult := ReviewCommand(cmdStr)
 
@@ -316,23 +343,24 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		} else {
 			reviewMsg = "⚠️ " + reviewMsg
 		}
-		select {
-		case ToolBridge.StatusChan <- ToolStatus{
+		ToolBridge.Send(ToolStatus{
 			Name:    "🤖 ai-review",
 			Args:    map[string]any{"command": cmdStr},
 			Running: false,
 			Success: reviewResult.Safe,
-		}:
-		default:
-		}
+		})
 
-		if reviewResult.Safe {
-			// AI says safe — auto-approve silently
+		if reviewResult.Safe && GlobalPermissionManager.GetMode() == ModeAuto {
+			// AI says safe — auto-approve silently ONLY in Auto Mode
 			GlobalPermissionManager.NoteApproval()
 			return b.runWithHooks(ctx, args, runnable)
 		}
-		// AI says not safe — include review note in the human prompt
-		autoReviewNote = fmt.Sprintf("\n   [AI Review] %s", reviewMsg)
+		// If safe but not in Auto Mode, add an informative note but still prompt for approval
+		if reviewResult.Safe {
+			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s (将在当前默认模式下提示确认)", reviewMsg)
+		} else {
+			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s", reviewMsg)
+		}
 	}
 
 	var promptMsg string
@@ -344,10 +372,25 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		promptMsg = fmt.Sprintf("\x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   原因: %s%s", cmdStr, reason, autoReviewNote)
 	} else if b.Name() == "file_write" {
 		pathStr := ""
+		contentStr := ""
 		if m, ok := args.(map[string]any); ok {
 			pathStr = fmt.Sprintf("%v", m["path"])
+			contentStr, _ = m["content"].(string)
+		} else if w, ok := args.(FileWriteArgs); ok {
+			pathStr = w.Path
+			contentStr = w.Content
 		}
-		promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
+
+		diffStr := ""
+		if pathStr != "" {
+			diffStr = computeFileDiff(pathStr, contentStr)
+		}
+
+		if diffStr != "" {
+			promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n%s", pathStr, reason, diffStr)
+		} else {
+			promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
+		}
 	} else if b.Name() == "file_read" {
 		pathStr := ""
 		if m, ok := args.(map[string]any); ok {
@@ -463,14 +506,11 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	startTime := time.Now()
 
 	// Send tool start event to the bridge
-	select {
-	case ToolBridge.StatusChan <- ToolStatus{
+	ToolBridge.Send(ToolStatus{
 		Name:    b.Name(),
 		Args:    args,
 		Running: true,
-	}:
-	default:
-	}
+	})
 
 	hookCtx := HookContext{
 		ToolName:  b.Name(),
@@ -482,17 +522,14 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	if preResult.Blocked {
 		err := fmt.Errorf("🪝 [Hook 拦截] 工具 %s 被 PreToolUse Hook 阻断: %s", b.Name(), preResult.BlockReason)
-		select {
-		case ToolBridge.StatusChan <- ToolStatus{
+		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
 			Running:  false,
 			Success:  false,
 			Error:    err,
 			Duration: time.Since(startTime),
-		}:
-		default:
-		}
+		})
 		return nil, err
 	}
 
@@ -514,32 +551,26 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	count := GlobalToolCircuitBreaker.Track(b.Name(), args, isFailure)
 	if isFailure && count >= 3 {
 		err = fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
-		select {
-		case ToolBridge.StatusChan <- ToolStatus{
+		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
 			Running:  false,
 			Success:  false,
 			Error:    err,
 			Duration: time.Since(startTime),
-		}:
-		default:
-		}
+		})
 		return nil, err
 	}
 
 	if err != nil {
-		select {
-		case ToolBridge.StatusChan <- ToolStatus{
+		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
 			Running:  false,
 			Success:  false,
 			Error:    err,
 			Duration: time.Since(startTime),
-		}:
-		default:
-		}
+		})
 		return nil, err
 	}
 
@@ -557,16 +588,13 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	}
 
 	// Send tool end event to the bridge
-	select {
-	case ToolBridge.StatusChan <- ToolStatus{
+	ToolBridge.Send(ToolStatus{
 		Name:     b.Name(),
 		Args:     args,
 		Running:  false,
 		Success:  true,
 		Duration: time.Since(startTime),
-	}:
-	default:
-	}
+	})
 
 	return result, nil
 }

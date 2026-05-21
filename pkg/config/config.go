@@ -40,25 +40,40 @@ type Config struct {
 	BaseURL  string `json:"base_url,omitempty"`
 }
 
-// GetConfigPath returns the absolute path to user configuration file (~/.go-claude.json)
+// GetConfigPath returns the absolute path to user configuration file (~/.iroha.json)
 func GetConfigPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".go-claude.json")
+	return filepath.Join(home, ".iroha.json")
 }
 
-// LoadConfig loads or initializes configuration from ~/.go-claude.json
+// LoadConfig loads or initializes configuration from ~/.iroha.json
 func LoadConfig() (*Config, error) {
 	path := GetConfigPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Default configuration (simulate mode)
-			return &Config{
-				Provider: "simulate",
-				Model:    ProviderDefaults["glm"].Model,
-			}, nil
+			// Check if old config file (~/.go-claude.json) exists for backward compatibility and auto-migrate
+			home, _ := os.UserHomeDir()
+			oldPath := filepath.Join(home, ".go-claude.json")
+			if oldData, oldErr := os.ReadFile(oldPath); oldErr == nil {
+				fmt.Printf("  检测到旧版配置文件 %s，正在自动迁移至 %s...\n", oldPath, path)
+				if writeErr := os.WriteFile(path, oldData, 0600); writeErr == nil {
+					data = oldData
+					err = nil
+					_ = os.Rename(oldPath, oldPath+".bak")
+				} else {
+					return nil, writeErr
+				}
+			} else {
+				// Default configuration (simulate mode)
+				return &Config{
+					Provider: "simulate",
+					Model:    ProviderDefaults["glm"].Model,
+				}, nil
+			}
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -82,7 +97,7 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveConfig persists the configurations to ~/.go-claude.json
+// SaveConfig persists the configurations to ~/.iroha.json
 func SaveConfig(cfg *Config) error {
 	path := GetConfigPath()
 	dir := filepath.Dir(path)
@@ -106,7 +121,7 @@ func RunConfigWizard() (*Config, error) {
 		existing = &Config{Provider: "simulate", Model: ProviderDefaults["glm"].Model}
 	}
 
-	fmt.Println("\n\x1b[1;32m  go-claude CLI 配置向导 (Setup Wizard)\x1b[0m")
+	fmt.Println("\n\x1b[1;32m  Iroha Code CLI 配置向导 (Setup Wizard)\x1b[0m")
 	fmt.Println("\x1b[90m  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m")
 	fmt.Println("  本向导将指引您配置首选模型、API Key 以及自定义 Base URL。")
 	fmt.Printf("  [直接按回车将保留默认值或当前配置]\n\n")
@@ -212,7 +227,7 @@ func RunConfigWizard() (*Config, error) {
 		return nil, fmt.Errorf("保存配置文件失败: %w", err)
 	}
 
-	fmt.Println("\n\x1b[1;32m  🎉 配置已成功持久化至 ~/.go-claude.json ！\x1b[0m")
+	fmt.Println("\n\x1b[1;32m  🎉 配置已成功持久化至 ~/.iroha.json ！\x1b[0m")
 	fmt.Printf("\x1b[90m  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n\n")
 
 	return cfg, nil

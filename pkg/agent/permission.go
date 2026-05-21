@@ -193,7 +193,7 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 	}
 
 	// Step 2: Mode-based decisions
-	isWrite := (toolName == "file_write" || toolName == "shell_run")
+	isWrite := (toolName == "file_write" || toolName == "shell_run" || toolName == "background_run" || strings.HasPrefix(toolName, "mcp__"))
 	isRead := (toolName == "file_read" || toolName == "search_grep" || toolName == "todo")
 
 	if pm.mode == ModePlan && isWrite {

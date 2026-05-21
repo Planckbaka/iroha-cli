@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"go-claude/pkg/agent"
-	"go-claude/pkg/config"
-	"go-claude/pkg/llm"
-	"go-claude/pkg/tui"
+	"iroha/pkg/agent"
+	"iroha/pkg/config"
+	"iroha/pkg/llm"
+	"iroha/pkg/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

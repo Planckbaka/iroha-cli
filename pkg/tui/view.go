@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"go-claude/pkg/agent"
+	"iroha/pkg/agent"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -33,7 +33,7 @@ func RenderMarkdown(raw string) string {
 }
 
 // RenderConfirmCard renders the Human-in-the-Loop inline confirmation prompt
-func RenderConfirmCard(prompt string) string {
+func RenderConfirmCard(prompt string, selectedIndex int) string {
 	var sb strings.Builder
 
 	// Header
@@ -50,12 +50,23 @@ func RenderConfirmCard(prompt string) string {
 	nStyle := lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorDanger)
 	aStyle := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorWarning)
 
+	if selectedIndex == 0 {
+		yStyle = yStyle.Background(ColorSuccess).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 1 {
+		nStyle = nStyle.Background(ColorDanger).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 2 {
+		aStyle = aStyle.Background(ColorWarning).Foreground(lipgloss.Color("#18181B"))
+	}
+
 	sb.WriteString("  ")
 	sb.WriteString(yStyle.Render("Y 同意"))
 	sb.WriteString("  ")
 	sb.WriteString(nStyle.Render("N 拒绝"))
 	sb.WriteString("  ")
 	sb.WriteString(aStyle.Render("A 始终允许"))
+
+	sb.WriteString("\n\n")
+	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render("←→ / Tab 选择   Enter 确认   快捷键: Y/N/A"))
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
@@ -78,7 +89,21 @@ func RenderWelcomeCard(runner *agent.CustomRunner) string {
 
 	modeStr := string(agent.GlobalPermissionManager.GetMode())
 
-	sb.WriteString("  " + StyleKeyActive.Render("go-claude") + "  " + StyleKeyHelp.Render("v1.3.0") + "\n")
+	// Cyber-Holographic IROHA ASCII Logo
+	cyan := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render
+	pink := lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render
+
+	sb.WriteString(cyan("   ___   ____     ___    _   _    _    ") + "\n")
+	sb.WriteString(cyan("  |_ _| |  _ \\   / _ \\  | | | |  / \\   ") + "\n")
+	sb.WriteString(pink("   | |  | |_) | | | | | | |_| | / _ \\  ") + "\n")
+	sb.WriteString(pink("   | |  |  _ <  | |_| | |  _  |/ ___ \\ ") + "\n")
+	sb.WriteString(pink("  |___| |_| \\_\\  \\___/  |_| |_/_/   \\_\\") + "\n\n")
+
+	// Energetic part-time student girl welcoming msg
+	welcomeMsg := pink("[Iroha] ") + lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Render("呼……刚结束打工！今天也来帮你写代码啦，我们开始吧！")
+	sb.WriteString("  " + welcomeMsg + "\n\n")
+
+	sb.WriteString("  " + StyleKeyHelp.Render("brand  ") + StylePrompt.Render("iroha code") + "  " + StyleKeyHelp.Render("v1.3.0") + "\n")
 	sb.WriteString("  " + StyleKeyHelp.Render("model  ") + StylePrompt.Render(modelName) + "\n")
 	sb.WriteString("  " + StyleKeyHelp.Render("mode   ") + StylePrompt.Render(modeStr) + "\n\n")
 	sb.WriteString("  " + StyleKeyHelp.Render("输入 / 查看所有命令   Up/Down — 历史记录   /exit — 退出") + "\n")
@@ -368,7 +393,7 @@ func RenderErrorCard(err error) string {
 	if strings.Contains(errMsg, "API") || strings.Contains(errMsg, "Authorization") || strings.Contains(errMsg, "ApiKey") || strings.Contains(errMsg, "接口") || strings.Contains(errMsg, "http") || strings.Contains(errMsg, "调用") {
 		tips = []string{
 			"请检查您的本地网络连接以及 API 终点（Base URL）是否可达",
-			"确认您已在 ~/.go-claude.json 或环境变量中配置了正确的 API Key",
+			"确认您已在 ~/.iroha.json 或环境变量中配置了正确的 API Key",
 			"如果您想进行离线只读操作，可以通过输入 /mode plan 切换为只读规划模式",
 		}
 	} else if strings.Contains(errMsg, "权限") || strings.Contains(errMsg, "Permission") || strings.Contains(errMsg, "denied") {
@@ -732,7 +757,7 @@ func RenderMCPDashboard() string {
 
 	if len(servers) == 0 {
 		sb.WriteString("  " + StyleKeyHelp.Render("no MCP servers configured") + "\n")
-		sb.WriteString("  " + StyleKeyHelp.Render("edit .go-claude/plugins.json to add servers") + "\n")
+		sb.WriteString("  " + StyleKeyHelp.Render("edit .iroha/plugins.json to add servers") + "\n")
 	} else {
 		for name, status := range servers {
 			statusSymbol := lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("disconnected")
@@ -825,17 +850,17 @@ func RenderStatusBar(m Model) string {
 	var left string
 	if m.CurrentStatusText != "" && (m.State == stateThinking || m.State == stateStreaming) {
 		// 优先显示 LLM status 标签文字
-		left = fmt.Sprintf("  ⏳ %s", m.CurrentStatusText)
+		left = fmt.Sprintf("  [thinking] %s", m.CurrentStatusText)
 	} else if m.ActiveTool.Running {
 		dur := time.Since(m.RoundStartTime).Round(time.Millisecond)
 		activity := FormatToolActivity(m.ActiveTool.Name, m.ActiveTool.Args)
 		if len(activity) > 40 {
 			activity = activity[:37] + "..."
 		}
-		left = fmt.Sprintf("  ⚙️ %s (%v)", activity, dur)
+		left = fmt.Sprintf("  [tool] %s (%v)", activity, dur)
 	} else if m.State == stateThinking || m.State == stateStreaming {
 		dur := time.Since(m.RoundStartTime).Round(time.Second)
-		left = fmt.Sprintf("  ⏳ 思考中... (%v)", dur)
+		left = fmt.Sprintf("  [thinking] 思考中... (%v)", dur)
 	} else {
 		left = fmt.Sprintf("  mode:%s", modeStr)
 	}

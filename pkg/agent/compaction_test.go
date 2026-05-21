@@ -65,8 +65,8 @@ func TestCompactContents_MicroCompaction(t *testing.T) {
 		t.Errorf("Original contents was modified! Expected length %d, got %d", len(largeStr), len(origOutput))
 	}
 
-	// Verify transcript was archived in tempHome/.go-claude/transcripts/session-default.jsonl
-	archivePath := filepath.Join(tempHome, ".go-claude", "transcripts", "session-default.jsonl")
+	// Verify transcript was archived in tempHome/.iroha/transcripts/session-default.jsonl
+	archivePath := filepath.Join(tempHome, ".iroha", "transcripts", "session-default.jsonl")
 	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
 		t.Fatalf("Expected transcript archive file to exist at %s", archivePath)
 	}

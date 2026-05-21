@@ -101,3 +101,60 @@ func TestBackgroundManager_TimeoutAndError(t *testing.T) {
 		t.Errorf("expected status error, got %s", notifs[0].Status)
 	}
 }
+
+func TestBackgroundManager_PersistedLoading(t *testing.T) {
+	// Create temporary directory for isolated testing
+	tmpDir, err := os.MkdirTemp("", "runtime-tasks-test-*")
+	if err != nil {
+		t.Fatalf("failed to create tmp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	bm1 := &BackgroundManager{
+		tasks: make(map[string]*BackgroundTask),
+		dir:   tmpDir,
+	}
+
+	// 1. Run a simple command
+	msg, err := bm1.Run(`echo "hello reload lane"`)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	_ = msg
+
+	// Wait for completion
+	var notifs []BackgroundNotification
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		notifs = bm1.DrainNotifications()
+		if len(notifs) > 0 {
+			break
+		}
+	}
+
+	if len(notifs) == 0 {
+		t.Fatalf("expected to receive completion notification")
+	}
+
+	taskID := notifs[0].TaskID
+
+	// 2. Re-instantiate a new background manager using the same directory
+	bm2 := &BackgroundManager{
+		tasks: make(map[string]*BackgroundTask),
+		dir:   tmpDir,
+	}
+	bm2.loadPersistedTasks()
+
+	// 3. Verify it loaded the task
+	details, err := bm2.Check(taskID)
+	if err != nil {
+		t.Fatalf("Check failed on reloaded manager: %v", err)
+	}
+
+	if !strings.Contains(details, taskID) {
+		t.Errorf("expected reloaded details to contain task ID %s, got %s", taskID, details)
+	}
+	if !strings.Contains(details, "completed") {
+		t.Errorf("expected reloaded task to be completed, got %s", details)
+	}
+}

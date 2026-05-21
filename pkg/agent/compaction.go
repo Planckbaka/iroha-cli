@@ -71,7 +71,7 @@ func CompactContents(contents []*genai.Content, sessionID string) []*genai.Conte
 		sessionID = "session-default"
 	}
 	homeDir, _ := os.UserHomeDir()
-	archiveDir := filepath.Join(homeDir, ".go-claude", "transcripts")
+	archiveDir := filepath.Join(homeDir, ".iroha", "transcripts")
 	archivePath := filepath.Join(archiveDir, sessionID+".jsonl")
 
 	for _, c := range copied {

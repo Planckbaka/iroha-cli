@@ -13,7 +13,7 @@ func TestPromptBuilderBasic(t *testing.T) {
 	prompt := builder.Build()
 
 	// 1. Check core persona
-	if !strings.Contains(prompt, "你是一个专业的软件工程助手，名叫 go-claude") {
+	if !strings.Contains(prompt, "你是一个专业的软件工程助手，名叫 Iroha") {
 		t.Errorf("expected prompt to contain core persona, got: %s", prompt)
 	}
 
@@ -64,7 +64,7 @@ func TestPromptBuilderDynamicContext(t *testing.T) {
 
 func TestPromptBuilderLayeredCLAUDE(t *testing.T) {
 	// Create a temp workspace directory for testing
-	tempDir, err := os.MkdirTemp("", "go-claude-test-*")
+	tempDir, err := os.MkdirTemp("", "iroha-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -116,14 +116,14 @@ func TestPromptBuilderLayeredCLAUDE(t *testing.T) {
 
 func TestPromptBuilderSkills(t *testing.T) {
 	// Create a temp workspace directory for testing
-	tempDir, err := os.MkdirTemp("", "go-claude-test-skills-*")
+	tempDir, err := os.MkdirTemp("", "iroha-test-skills-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Create a mock .go-claude/skills folder
-	skillsDir := filepath.Join(tempDir, ".go-claude", "skills")
+	// Create a mock .iroha/skills folder
+	skillsDir := filepath.Join(tempDir, ".iroha", "skills")
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
 		t.Fatalf("failed to create skills dir: %v", err)
 	}

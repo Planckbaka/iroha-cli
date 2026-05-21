@@ -4,14 +4,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Modern Dark / Aubergine Color Palette (Claude Code Theme)
+// Cyber-Holographic Color Palette (Iroha Code Theme)
 var (
-	ColorPrimary   = lipgloss.Color("#FFFFFF") // Pure terminal white
-	ColorSecondary = lipgloss.Color("#A1A1AA") // Zinc/Slate
-	ColorSuccess   = lipgloss.Color("#10B981") // Emerald
+	ColorPrimary   = lipgloss.Color("#22D3EE") // Electric Cyan/Turquoise
+	ColorSecondary = lipgloss.Color("#EC4899") // Neon Hot Pink
+	ColorSuccess   = lipgloss.Color("#10B981") // Cyber Emerald
 	ColorWarning   = lipgloss.Color("#F59E0B") // Amber
-	ColorDanger    = lipgloss.Color("#F43F5E") // Rose Red
-	ColorTextMuted = lipgloss.Color("#71717A") // Zinc Muted
+	ColorDanger    = lipgloss.Color("#E11D48") // Rose/Magenta
+	ColorTextMuted = lipgloss.Color("#64748B") // Slate
 )
 
 // Lipgloss Styles
@@ -76,8 +76,8 @@ var (
 			Bold(true)
 
 	StyleStatusBar = lipgloss.NewStyle().
-			Background(lipgloss.Color("#27272A")).
-			Foreground(lipgloss.Color("#E4E4E7")).
+			Background(lipgloss.Color("#1E1B4B")).
+			Foreground(lipgloss.Color("#22D3EE")).
 			Bold(true)
 
 	StyleDiffAdd = lipgloss.NewStyle().

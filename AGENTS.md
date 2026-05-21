@@ -1,6 +1,6 @@
 <!-- Generated: 2026-05-20 | Updated: 2026-05-20 -->
 
-# go-claude
+# iroha-code
 
 ## Purpose
 An interactive AI Agent CLI built in Go, powered by Zhipu GLM-4 / OpenAI-compatible LLMs with a Bubble Tea TUI, human-in-the-loop tool-use permissions, cross-session memory, hook system, and task planning. It is designed as a Claude Code-inspired agent for the terminal.
@@ -10,7 +10,7 @@ An interactive AI Agent CLI built in Go, powered by Zhipu GLM-4 / OpenAI-compati
 |------|-------------|
 | `go.mod` | Go module definition (go 1.26.1, Charm stack, Google ADK/GenAI) |
 | `go.sum` | Dependency checksums |
-| `.gitignore` | Excludes binary (`/agent-cli`), `.omc/`, `.go-claude/`, `scratch/` |
+| `.gitignore` | Excludes binary (`/iroha`), `.omc/`, `.iroha/`, `scratch/` |
 
 ## Subdirectories
 | Directory | Purpose |
@@ -21,11 +21,11 @@ An interactive AI Agent CLI built in Go, powered by Zhipu GLM-4 / OpenAI-compati
 ## For AI Agents
 
 ### Working In This Directory
-- Run `go build ./cmd/agent-cli` to compile the binary
+- Run `go build -o iroha ./cmd/agent-cli` to compile the binary
 - Run `go test ./...` to execute all tests
-- The binary output is `./agent-cli` at repo root
-- Config is stored at `~/.go-claude.json` (outside repo)
-- Project-local state lives in `./.go-claude/` (gitignored)
+- The binary output is `./iroha` at repo root
+- Config is stored at `~/.iroha.json` (outside repo)
+- Project-local state lives in `./.iroha/` (gitignored)
 
 ### Testing Requirements
 - Unit tests live alongside source files (`*_test.go`)

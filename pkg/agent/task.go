@@ -58,7 +58,23 @@ func ResolveTasksDir() string {
 	// Fallback to user-global tasks directory
 	home, err := os.UserHomeDir()
 	if err == nil {
-		globalTasksDir := filepath.Join(home, ".go-claude", "tasks")
+		globalTasksDir := filepath.Join(home, ".iroha", "tasks")
+		globalGoClaudeDir := filepath.Join(home, ".go-claude", "tasks")
+		if _, err := os.Stat(globalTasksDir); os.IsNotExist(err) {
+			if _, oldErr := os.Stat(globalGoClaudeDir); oldErr == nil {
+				_ = os.MkdirAll(globalTasksDir, 0755)
+				if files, readErr := os.ReadDir(globalGoClaudeDir); readErr == nil {
+					for _, f := range files {
+						oldFile := filepath.Join(globalGoClaudeDir, f.Name())
+						newFile := filepath.Join(globalTasksDir, f.Name())
+						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
+							_ = os.WriteFile(newFile, data, 0644)
+						}
+					}
+					_ = os.Rename(globalGoClaudeDir, globalGoClaudeDir+".bak")
+				}
+			}
+		}
 		_ = os.MkdirAll(globalTasksDir, 0755)
 		return globalTasksDir
 	}
