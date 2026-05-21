@@ -104,7 +104,7 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 				}
 
 				chunk := response[i:end]
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -113,9 +113,11 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 					},
 					Partial:      true,
 					TurnComplete: false,
-				}, nil)
+				}, nil) {
+					return
+				}
 			}
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -124,7 +126,9 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 				},
 				Partial:      false,
 				TurnComplete: true,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
@@ -145,7 +149,7 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 
 		if isSensitiveRequest {
 			// Trigger a function call (tool call) response
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -159,7 +163,9 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 				},
 				Partial:      false,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
@@ -180,7 +186,7 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 			}
 
 			chunk := fullResponse[i:end]
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -189,11 +195,13 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 				},
 				Partial:      true,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 		}
 
 		// Final empty chunk to signal completion
-		yield(&model.LLMResponse{
+		if !yield(&model.LLMResponse{
 			Content: &genai.Content{
 				Role: "model",
 				Parts: []*genai.Part{
@@ -202,7 +210,9 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 			},
 			Partial:      false,
 			TurnComplete: true,
-		}, nil)
+		}, nil) {
+			return
+		}
 	}
 }
 

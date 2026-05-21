@@ -27,9 +27,10 @@ var SystemPromptTrigger func() string
 
 // GLMAdapter integrates Zhipu AI GLM-4 (OpenAI-compatible) into ADK
 type GLMAdapter struct {
-	modelName string
-	apiKey    string
-	baseURL   string
+	modelName        string
+	apiKey           string
+	baseURL          string
+	cumulativeTokens int
 }
 
 func NewGLMAdapter(modelName string, apiKey string, baseURL string) *GLMAdapter {
@@ -47,11 +48,28 @@ func (g *GLMAdapter) Name() string {
 	return g.modelName
 }
 
+func (g *GLMAdapter) APIKey() string {
+	return g.apiKey
+}
+
+func (g *GLMAdapter) BaseURL() string {
+	return g.baseURL
+}
+
+func (g *GLMAdapter) CumulativeTokens() int {
+	return g.cumulativeTokens
+}
+
+func (g *GLMAdapter) AddTokens(n int) {
+	g.cumulativeTokens += n
+}
+
 // Zhipu GLM-4 API structures (OpenAI compatible)
 type glmMessage struct {
-	Role    string        `json:"role"`
-	Content any           `json:"content,omitempty"`
-	Tools   []glmToolCall `json:"tool_calls,omitempty"`
+	Role       string        `json:"role"`
+	Content    any           `json:"content,omitempty"`
+	Tools      []glmToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
 }
 
 type glmToolCall struct {
@@ -99,6 +117,11 @@ type glmStreamResponse struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 }
 
 // CompactRequestContents checks for large tool outputs and compacts req.Contents.
@@ -313,6 +336,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 
 			var textParts []string
 			var toolCalls []glmToolCall
+			var toolCallID string
 
 			for _, part := range c.Parts {
 				if part.Text != "" {
@@ -334,6 +358,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					role = "tool"
 					respBytes, _ := json.Marshal(part.FunctionResponse.Response)
 					textParts = append(textParts, string(respBytes))
+					toolCallID = "call_" + part.FunctionResponse.Name
 				}
 			}
 
@@ -345,9 +370,10 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			}
 
 			messages = append(messages, glmMessage{
-				Role:    role,
-				Content: content,
-				Tools:   toolCalls,
+				Role:       role,
+				Content:    content,
+				Tools:      toolCalls,
+				ToolCallID: toolCallID,
 			})
 		}
 
@@ -384,11 +410,21 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			Stream:   true,
 		}
 
+		// DEBUG: log tools sent to API
+		toolNames := make([]string, 0, len(tools))
+		for _, t := range tools {
+			toolNames = append(toolNames, t.Function.Name)
+		}
+		DebugLog("Sending %d tools: %v | Model: %s", len(tools), toolNames, g.modelName)
+
 		reqBytes, err := json.Marshal(glmReq)
 		if err != nil {
-			yield(nil, fmt.Errorf("序列化 GLM 请求失败: %w", err))
+			if !yield(nil, fmt.Errorf("序列化 GLM 请求失败: %w", err)) {
+				return
+			}
 			return
 		}
+		DumpDebugFile("req.json", reqBytes)
 
 		// 4. Send HTTP request to dynamic endpoint
 		apiURL := g.baseURL
@@ -420,7 +456,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 
 				// Stream warning to TUI
 				warnMsg := fmt.Sprintf("\n⚠️  [网络异常] 正在尝试第 %d/%d 次自动重试，等待约 %.1f 秒...\n", attempt, maxRetries, delaySec)
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -429,12 +465,16 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					},
 					Partial:      true,
 					TurnComplete: false,
-				}, nil)
+				}, nil) {
+					return
+				}
 
 				// Sleep with context support
 				select {
 				case <-ctx.Done():
-					yield(nil, ctx.Err())
+					if !yield(nil, ctx.Err()) {
+						return
+					}
 					return
 				case <-time.After(time.Duration(delaySec * float64(time.Second))):
 				}
@@ -470,7 +510,9 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					continue
 				} else {
 					// Non-transient error, fail immediately
-					yield(nil, lastErr)
+					if !yield(nil, lastErr) {
+						return
+					}
 					return
 				}
 			}
@@ -481,7 +523,9 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 		}
 
 		if lastErr != nil {
-			yield(nil, lastErr)
+			if !yield(nil, lastErr) {
+				return
+			}
 			return
 		}
 
@@ -499,7 +543,9 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 				if err == io.EOF {
 					break
 				}
-				yield(nil, fmt.Errorf("读取 API 响应流出错: %w", err))
+				if !yield(nil, fmt.Errorf("读取 API 响应流出错: %w", err)) {
+					return
+				}
 				return
 			}
 
@@ -518,6 +564,11 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 				continue
 			}
 
+			// 提取 token 用量（如果 API 在 SSE chunk 中返回了 usage）
+			if chunk.Usage.TotalTokens > 0 {
+				g.AddTokens(chunk.Usage.TotalTokens)
+			}
+
 			if len(chunk.Choices) == 0 {
 				continue
 			}
@@ -525,7 +576,12 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			choice := chunk.Choices[0]
 			delta := choice.Delta
 
-			// Handle streaming Tool Call arguments
+			// DEBUG: log finish_reason and tool_calls in SSE
+			if choice.FinishReason != "" || len(delta.ToolCalls) > 0 {
+				DebugLog("[SSE] finish=%s toolCalls=%d toolName=%s contentLen=%d", choice.FinishReason, len(delta.ToolCalls), currentToolName, len(delta.Content))
+			}
+
+			// 1. Handle streaming Tool Call arguments accumulation
 			if len(delta.ToolCalls) > 0 {
 				tc := delta.ToolCalls[0]
 				if tc.Function.Name != "" {
@@ -534,40 +590,48 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 				if tc.Function.Arguments != "" {
 					currentToolArgs.WriteString(tc.Function.Arguments)
 				}
+			}
 
-				if choice.FinishReason != "" {
-					var parsedArgs map[string]any
-					_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
+			// 2. If we are currently accumulating a tool call and see any finish reason, yield it immediately
+			if currentToolName != "" && choice.FinishReason != "" {
+				var parsedArgs map[string]any
+				_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
 
-					yield(&model.LLMResponse{
-						Content: &genai.Content{
-							Role: "model",
-							Parts: []*genai.Part{
-								{
-									FunctionCall: &genai.FunctionCall{
-										Name: currentToolName,
-										Args: parsedArgs,
-									},
+				if !yield(&model.LLMResponse{
+					Content: &genai.Content{
+						Role: "model",
+						Parts: []*genai.Part{
+							{
+								FunctionCall: &genai.FunctionCall{
+									Name: currentToolName,
+									Args: parsedArgs,
 								},
 							},
 						},
-						Partial:      false,
-						TurnComplete: false,
-					}, nil)
-
-					currentToolName = ""
-					currentToolArgs.Reset()
-
-					if choice.FinishReason != "tool_calls" {
-						sentFinal = true
-					}
+					},
+					Partial:      false,
+					TurnComplete: false,
+				}, nil) {
+					return
 				}
+
+				currentToolName = ""
+				currentToolArgs.Reset()
+
+				if choice.FinishReason != "tool_calls" {
+					sentFinal = true
+				}
+				continue
+			}
+
+			// 3. Skip regular text processing if this chunk was just tool call delta accumulation
+			if len(delta.ToolCalls) > 0 {
 				continue
 			}
 
 			// Handle streaming regular text content
 			if delta.Content != "" {
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -576,12 +640,14 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					},
 					Partial:      true,
 					TurnComplete: false,
-				}, nil)
+				}, nil) {
+					return
+				}
 			}
 
 			// Any non-empty finish reason signals the model is done
 			if choice.FinishReason != "" {
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -590,9 +656,35 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 					},
 					Partial:      false,
 					TurnComplete: true,
-				}, nil)
+				}, nil) {
+					return
+				}
 				sentFinal = true
 				break
+			}
+		}
+
+		// Flush any remaining accumulated tool call if the stream ended prematurely
+		if currentToolName != "" {
+			var parsedArgs map[string]any
+			_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
+
+			if !yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: currentToolName,
+								Args: parsedArgs,
+							},
+						},
+					},
+				},
+				Partial:      false,
+				TurnComplete: false,
+			}, nil) {
+				return
 			}
 		}
 
@@ -600,7 +692,7 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 		// "TODO: last event is not final" error when the stream ends
 		// without a proper finish_reason (e.g. network timeout, "length").
 		if !sentFinal {
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -609,7 +701,9 @@ func (g *GLMAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest,
 				},
 				Partial:      false,
 				TurnComplete: true,
-			}, nil)
+			}, nil) {
+				return
+			}
 		}
 	}
 }
@@ -629,7 +723,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 
 		if strings.Contains(userPrompt, "test_error_network") {
 			// Yield warning
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -638,7 +732,9 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      true,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 
 			select {
 			case <-ctx.Done():
@@ -647,7 +743,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 			}
 
 			// Yield warning 2
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -656,7 +752,9 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      true,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 
 			select {
 			case <-ctx.Done():
@@ -675,7 +773,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				if end > len(response) {
 					end = len(response)
 				}
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -684,9 +782,11 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 					},
 					Partial:      true,
 					TurnComplete: false,
-				}, nil)
+				}, nil) {
+					return
+				}
 			}
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -695,13 +795,15 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      false,
 				TurnComplete: true,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
 		if strings.Contains(userPrompt, "test_error_tool") {
 			// Trigger a file_read tool call on a nonexistent file to test error recovery
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -715,7 +817,9 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      false,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
@@ -742,7 +846,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				}
 
 				chunk := response[i:end]
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
 						Parts: []*genai.Part{
@@ -751,9 +855,11 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 					},
 					Partial:      true,
 					TurnComplete: false,
-				}, nil)
+				}, nil) {
+					return
+				}
 			}
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -762,7 +868,9 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      false,
 				TurnComplete: true,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
@@ -782,7 +890,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 		}
 
 		if isSensitiveRequest {
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -796,7 +904,9 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      false,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 			return
 		}
 
@@ -817,7 +927,7 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 			}
 
 			chunk := fullResponse[i:end]
-			yield(&model.LLMResponse{
+			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role: "model",
 					Parts: []*genai.Part{
@@ -826,10 +936,12 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 				},
 				Partial:      true,
 				TurnComplete: false,
-			}, nil)
+			}, nil) {
+				return
+			}
 		}
 
-		yield(&model.LLMResponse{
+		if !yield(&model.LLMResponse{
 			Content: &genai.Content{
 				Role: "model",
 				Parts: []*genai.Part{
@@ -838,6 +950,8 @@ func (g *GLMAdapter) generateSimulatedGLM(ctx context.Context, req *model.LLMReq
 			},
 			Partial:      false,
 			TurnComplete: true,
-		}, nil)
+		}, nil) {
+			return
+		}
 	}
 }

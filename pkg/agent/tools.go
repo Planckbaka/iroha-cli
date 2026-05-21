@@ -1,14 +1,18 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/adk/tool"
@@ -50,7 +54,20 @@ type FileReadResult struct {
 	Content string `json:"content" description:"文件内容"`
 }
 
+const maxFileReadSize = 10 * 1024 * 1024 // 10MB
+
 func FileReadHandler(ctx tool.Context, args FileReadArgs) (FileReadResult, error) {
+	info, err := os.Stat(args.Path)
+	if err != nil {
+		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
+	}
+	if info.IsDir() {
+		return FileReadResult{}, fmt.Errorf("'%s' 是一个目录，不是文件。请使用 shell_run 执行 ls 或 find 命令来查看目录结构", args.Path)
+	}
+	if info.Size() > maxFileReadSize {
+		return FileReadResult{}, fmt.Errorf("文件 '%s' 大小为 %d 字节，超过 10MB 读取限制。请使用 shell_run 配合 head/tail 来分段读取", args.Path, info.Size())
+	}
+
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
 		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
@@ -84,7 +101,81 @@ func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, er
 	return FileWriteResult{Success: true}, nil
 }
 
-// 3. search_grep
+// 3. list_directory
+type ListDirArgs struct {
+	Path     string `json:"path" description:"要列出的目录路径（默认为当前工作目录）"`
+	MaxDepth int    `json:"max_depth,omitempty" description:"递归深度（默认 1，仅当前层级；最大 4）"`
+}
+
+type ListDirResult struct {
+	Entries []string `json:"entries" description:"目录条目列表（带 / 后缀表示子目录）"`
+}
+
+func ListDirHandler(ctx tool.Context, args ListDirArgs) (ListDirResult, error) {
+	if args.Path == "" {
+		args.Path = "."
+	}
+	if args.MaxDepth <= 0 {
+		args.MaxDepth = 1
+	}
+	if args.MaxDepth > 4 {
+		args.MaxDepth = 4
+	}
+
+	cwd, _ := os.Getwd()
+	root := args.Path
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(cwd, root)
+	}
+
+	var entries []string
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Skip excluded directories
+		if info.IsDir() && grepExcludedDirs[info.Name()] {
+			return filepath.SkipDir
+		}
+
+		// Calculate current depth
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		if rel == "." {
+			return nil // skip root itself
+		}
+
+		depth := len(strings.Split(rel, string(filepath.Separator)))
+		if depth > args.MaxDepth {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if info.IsDir() {
+			entries = append(entries, rel+"/")
+		} else {
+			entries = append(entries, rel)
+		}
+
+		if len(entries) >= 200 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return ListDirResult{}, WrapToolError("list_directory", args, err)
+	}
+
+	return ListDirResult{Entries: entries}, nil
+}
+
+// 4. search_grep
 type GrepArgs struct {
 	Pattern string `json:"pattern" description:"正则表达式搜索模式"`
 }
@@ -92,6 +183,14 @@ type GrepArgs struct {
 type GrepResult struct {
 	Matches []string `json:"matches" description:"匹配到的行列表"`
 }
+
+var grepExcludedDirs = map[string]bool{
+	".git": true, "node_modules": true, ".venv": true,
+	"vendor": true, "__pycache__": true, ".next": true,
+	"dist": true, "build": true, ".cache": true,
+}
+
+const maxGrepFileSize = 1 * 1024 * 1024 // 1MB
 
 func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 	re, err := regexp.Compile(args.Pattern)
@@ -106,8 +205,16 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 		if err != nil {
 			return nil
 		}
-		// Skip directories, .git, and build artifacts
-		if info.IsDir() || containsAnyPath(path, []string{".git", "node_modules", "go.sum", "inspect.go"}) {
+		// Skip excluded directories entirely — must return SkipDir, not nil
+		if info.IsDir() {
+			if grepExcludedDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip large files
+		if info.Size() > maxGrepFileSize {
 			return nil
 		}
 
@@ -121,7 +228,7 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 		for i, line := range lines {
 			if re.Match(line) {
 				matches = append(matches, fmt.Sprintf("%s:%d: %s", rel, i+1, string(line)))
-				if len(matches) >= 50 { // Limit to 50 results
+				if len(matches) >= 50 {
 					return filepath.SkipAll
 				}
 			}
@@ -151,23 +258,71 @@ type ShellRunResult struct {
 	ExitCode int    `json:"exit_code" description:"退出状态码"`
 }
 
-func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error) {
-	cmd := exec.Command("sh", "-c", args.Command)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+const shellRunTimeout = 30 * time.Second
 
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-		} else {
-			exitCode = -1
+const maxStreamLines = 500
+
+func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error) {
+	runCtx, cancel := context.WithTimeout(context.Background(), shellRunTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "sh", "-c", args.Command)
+
+	var outBuf bytes.Buffer
+	pr, pw := io.Pipe()
+	multiWriter := io.MultiWriter(&outBuf, pw)
+
+	cmd.Stdout = multiWriter
+	stderr, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		return ShellRunResult{}, err
+	}
+	defer cmd.Process.Kill()
+
+	// stderr 合并 goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		io.Copy(multiWriter, stderr)
+	}()
+
+	// 逐行流式扫描
+	scanner := bufio.NewScanner(pr)
+	lineCount := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineCount++
+		if lineCount <= maxStreamLines {
+			select {
+			case ToolBridge.StatusChan <- ToolStatus{
+				Name:        "shell_run",
+				Running:     true,
+				StreamLines: []string{line},
+			}:
+			default:
+			}
 		}
 	}
 
-	outputStr := out.String()
+	// 顺序保证：scanner EOF → join stderr goroutine → 关闭 pipe writer → cmd.Wait()
+	wg.Wait()
+	pw.Close()
+	cmd.Wait()
+
+	// 构建最终结果
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	outputStr := outBuf.String()
+	if runCtx.Err() == context.DeadlineExceeded {
+		outputStr += "\n[超时] 命令执行超过 30 秒，已被强制终止。"
+		exitCode = -1
+	}
+
 	if exitCode != 0 {
 		wrappedErr := WrapToolError("shell_run", args, fmt.Errorf("命令运行失败 (exit code %d)", exitCode))
 		outputStr += "\n" + wrappedErr.Error()
@@ -219,6 +374,14 @@ func GetSWETools() ([]tool.Tool, error) {
 		Name:        "search_grep",
 		Description: "对当前目录进行正则表达式全局文本搜索，类似于 grep/ripgrep。",
 	}, GrepHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	listDirTool, err := functiontool.New(functiontool.Config{
+		Name:        "list_directory",
+		Description: "列出指定目录下的文件和子目录。支持递归深度控制，自动跳过 .git 等大型排除目录。这是查看项目结构的首选工具。",
+	}, ListDirHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -480,8 +643,17 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	// s20 CI Watcher Tool
+	ciWatchTool, err := functiontool.New(functiontool.Config{
+		Name:        "agent_watch_ci",
+		Description: "启动后台进程监听 GitHub Actions CI 状态，报错时发送收件箱通知。",
+	}, AgentWatchCIHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	resTools := []tool.Tool{
-		readTool, writeTool, grepTool, shellTool, todoTool,
+		readTool, writeTool, listDirTool, grepTool, shellTool, todoTool,
 		memorySaveTool, memoryListTool,
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,
@@ -497,6 +669,8 @@ func GetSWETools() ([]tool.Tool, error) {
 		wtCreateTool, wtListTool, wtStatusTool, wtEnterTool, wtCloseoutTool,
 		// s19
 		mcpServerListTool,
+		// s20
+		ciWatchTool,
 	}
 
 	// s19 Dynamic MCP Tools

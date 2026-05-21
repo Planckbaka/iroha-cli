@@ -47,6 +47,27 @@ var Bridge = &ConfirmationBridge{
 	CancelChan:   make(chan struct{}),
 }
 
+// ToolStatus represents the real-time execution state of a tool
+type ToolStatus struct {
+	Name        string
+	Args        any
+	Running     bool
+	Success     bool
+	Error       error
+	Duration    time.Duration
+	StreamLines []string // 增量输出行（仅 shell_run 逐行流式使用）
+}
+
+// ToolStatusBridge pipes tool status changes from the background runner to the foreground TUI
+type ToolStatusBridge struct {
+	StatusChan chan ToolStatus
+}
+
+var ToolBridge = &ToolStatusBridge{
+	StatusChan: make(chan ToolStatus, 50),
+}
+
+
 // CustomRunner wraps ADK runner and manages background execution
 type CustomRunner struct {
 	adkRunner *runner.Runner
@@ -76,7 +97,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	}
 
 	// 4. Create llmagent — inject persistent memories into the system instruction
-	baseInstruction := "你是一个专业的软件工程助手，名叫 go-claude。你可以帮助用户读取文件、写入文件、在当前工作区运行测试与命令、以及检索代码。对于写文件和运行 Shell 命令等敏感操作，你必须调用相应的工具，并且框架会请求用户确认。请以精美的 Markdown 格式回答用户的问题。"
+	baseInstruction := "" // now built dynamically by SystemPromptBuilder in prompt.go
 
 	// s09: Append any durable memories that survived from previous sessions.
 	// "Memory gives direction; current observation gives truth."
@@ -113,6 +134,20 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	// 7. Fire SessionStart hooks — runs external scripts once at startup
 	GlobalHookManager.RunHooks(HookSessionStart, HookContext{})
 
+	// Initialize debug logging for LLM adapter
+	llm.InitDebugLog()
+
+	// 8. Configure auto-review with the same provider credentials
+	if glmAdapter, ok := modelAdapter.(interface {
+		APIKey() string
+		BaseURL() string
+	}); ok {
+		SetAutoReviewConfig(glmAdapter.APIKey(), glmAdapter.BaseURL(), modelName)
+	} else {
+		// Use simulate mode for auto-review when real adapter is unavailable
+		SetAutoReviewConfig("simulate", "", modelName)
+	}
+
 	// Start background CronScheduler
 	GlobalCronScheduler.Start()
 
@@ -127,6 +162,19 @@ func (cr *CustomRunner) ModelName() string {
 		return "Unknown"
 	}
 	return cr.llmModel.Name()
+}
+
+func (cr *CustomRunner) GetTokenUsage() int {
+	if cr.llmModel == nil {
+		return 0
+	}
+	if adapter, ok := cr.llmModel.(interface{ CumulativeTokens() int }); ok {
+		tokens := adapter.CumulativeTokens()
+		if tokens > 0 {
+			return tokens
+		}
+	}
+	return 0
 }
 
 // Execute handles running a prompt asynchronously and piping events to a callback
@@ -246,36 +294,80 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		return b.runWithHooks(ctx, args, runnable)
 	}
 
-	// Step 2: "ask" behavior - block on TUI confirmation
+	// Step 2: "ask" behavior — first run auto-review, then optionally show human confirmation
+	var autoReviewNote string
+	if b.Name() == "shell_run" {
+		cmdStr := ""
+		if m, ok := args.(map[string]any); ok {
+			cmdStr = fmt.Sprintf("%v", m["command"])
+		}
+		// Send to TUI: AI reviewing...
+		select {
+		case ToolBridge.StatusChan <- ToolStatus{
+			Name:    "🤖 ai-review",
+			Args:    map[string]any{"command": cmdStr},
+			Running: true,
+		}:
+		default:
+		}
+
+		reviewResult := ReviewCommand(cmdStr)
+
+		// Send review result to TUI
+		reviewMsg := fmt.Sprintf("AI 审查: %s", reviewResult.Reason)
+		if reviewResult.Safe {
+			reviewMsg = "✅ " + reviewMsg
+		} else {
+			reviewMsg = "⚠️ " + reviewMsg
+		}
+		select {
+		case ToolBridge.StatusChan <- ToolStatus{
+			Name:    "🤖 ai-review",
+			Args:    map[string]any{"command": cmdStr},
+			Running: false,
+			Success: reviewResult.Safe,
+		}:
+		default:
+		}
+
+		if reviewResult.Safe {
+			// AI says safe — auto-approve silently
+			GlobalPermissionManager.NoteApproval()
+			return b.runWithHooks(ctx, args, runnable)
+		}
+		// AI says not safe — include review note in the human prompt
+		autoReviewNote = fmt.Sprintf("\n   [AI Review] %s", reviewMsg)
+	}
+
 	var promptMsg string
 	if b.Name() == "shell_run" {
 		cmdStr := ""
 		if m, ok := args.(map[string]any); ok {
 			cmdStr = fmt.Sprintf("%v", m["command"])
 		}
-		promptMsg = fmt.Sprintf("🔨 \x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   ⚠️  %s", cmdStr, reason)
+		promptMsg = fmt.Sprintf("\x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   原因: %s%s", cmdStr, reason, autoReviewNote)
 	} else if b.Name() == "file_write" {
 		pathStr := ""
 		if m, ok := args.(map[string]any); ok {
 			pathStr = fmt.Sprintf("%v", m["path"])
 		}
-		promptMsg = fmt.Sprintf("📝 \x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   ⚠️  %s", pathStr, reason)
+		promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
 	} else if b.Name() == "file_read" {
 		pathStr := ""
 		if m, ok := args.(map[string]any); ok {
 			pathStr = fmt.Sprintf("%v", m["path"])
 		}
-		promptMsg = fmt.Sprintf("📖 \x1b[1;34m[file_read]\x1b[0m 正在尝试读取文件: \x1b[32m%s\x1b[0m\n   ⚠️  %s", pathStr, reason)
+		promptMsg = fmt.Sprintf("\x1b[1;34m[file_read]\x1b[0m 正在尝试读取文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
 	} else if b.Name() == "search_grep" {
 		patternStr := ""
 		if m, ok := args.(map[string]any); ok {
 			patternStr = fmt.Sprintf("%v", m["pattern"])
 		}
-		promptMsg = fmt.Sprintf("🔍 \x1b[1;35m[search_grep]\x1b[0m 正在尝试全局搜索模式: \x1b[32m\"%s\"\x1b[0m\n   ⚠️  %s", patternStr, reason)
+		promptMsg = fmt.Sprintf("\x1b[1;35m[search_grep]\x1b[0m 正在尝试全局搜索模式: \x1b[32m\"%s\"\x1b[0m\n   原因: %s", patternStr, reason)
 	} else if b.Name() == "todo" {
-		promptMsg = fmt.Sprintf("📋 \x1b[1;32m[todo]\x1b[0m 正在尝试更新任务规划进度表\n   ⚠️  %s", reason)
+		promptMsg = fmt.Sprintf("\x1b[1;32m[todo]\x1b[0m 正在尝试更新任务规划进度表\n   原因: %s", reason)
 	} else {
-		promptMsg = fmt.Sprintf("🔧 \x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   ⚠️  %s", b.Name(), args, reason)
+		promptMsg = fmt.Sprintf("\x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   原因: %s", b.Name(), args, reason)
 	}
 
 	// Send to TUI with cancellation support
@@ -372,6 +464,18 @@ func (b *blockingConfirmationTool) Declaration() *genai.FunctionDeclaration {
 // The loop (runner) retains full control of flow; hooks only observe, block,
 // or annotate at their named moments.
 func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runnable adkRunnableTool) (map[string]any, error) {
+	startTime := time.Now()
+
+	// Send tool start event to the bridge
+	select {
+	case ToolBridge.StatusChan <- ToolStatus{
+		Name:    b.Name(),
+		Args:    args,
+		Running: true,
+	}:
+	default:
+	}
+
 	hookCtx := HookContext{
 		ToolName:  b.Name(),
 		ToolInput: args,
@@ -381,7 +485,19 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	preResult := GlobalHookManager.RunHooks(HookPreToolUse, hookCtx)
 
 	if preResult.Blocked {
-		return nil, fmt.Errorf("🪝 [Hook 拦截] 工具 %s 被 PreToolUse Hook 阻断: %s", b.Name(), preResult.BlockReason)
+		err := fmt.Errorf("🪝 [Hook 拦截] 工具 %s 被 PreToolUse Hook 阻断: %s", b.Name(), preResult.BlockReason)
+		select {
+		case ToolBridge.StatusChan <- ToolStatus{
+			Name:     b.Name(),
+			Args:     args,
+			Running:  false,
+			Success:  false,
+			Error:    err,
+			Duration: time.Since(startTime),
+		}:
+		default:
+		}
+		return nil, err
 	}
 
 	// ── Stage B: Execute the real tool ───────────────────────────────────
@@ -401,10 +517,33 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	count := GlobalToolCircuitBreaker.Track(b.Name(), args, isFailure)
 	if isFailure && count >= 3 {
-		return nil, fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
+		err = fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
+		select {
+		case ToolBridge.StatusChan <- ToolStatus{
+			Name:     b.Name(),
+			Args:     args,
+			Running:  false,
+			Success:  false,
+			Error:    err,
+			Duration: time.Since(startTime),
+		}:
+		default:
+		}
+		return nil, err
 	}
 
 	if err != nil {
+		select {
+		case ToolBridge.StatusChan <- ToolStatus{
+			Name:     b.Name(),
+			Args:     args,
+			Running:  false,
+			Success:  false,
+			Error:    err,
+			Duration: time.Since(startTime),
+		}:
+		default:
+		}
 		return nil, err
 	}
 
@@ -419,6 +558,18 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 			result = make(map[string]any)
 		}
 		result["hook_notes"] = strings.Join(allMessages, "\n")
+	}
+
+	// Send tool end event to the bridge
+	select {
+	case ToolBridge.StatusChan <- ToolStatus{
+		Name:     b.Name(),
+		Args:     args,
+		Running:  false,
+		Success:  true,
+		Duration: time.Since(startTime),
+	}:
+	default:
 	}
 
 	return result, nil

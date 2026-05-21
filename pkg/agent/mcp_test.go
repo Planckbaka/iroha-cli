@@ -149,3 +149,37 @@ func TestMCPToolRouter_DiscoveryAndRouting(t *testing.T) {
 		t.Errorf("unexpected dynamic tool run result: %v", res)
 	}
 }
+
+func TestMCPToolRouter_GenerateDefaultConfig(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "go-claude-mcp-default-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(tempDir)
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	router := &MCPToolRouter{
+		clients: make(map[string]*MCPClient),
+	}
+	defer router.CloseAll()
+
+	// Calling LoadAndStartPlugins should generate plugins.json
+	_ = router.LoadAndStartPlugins()
+
+	cfgPath := filepath.Join(tempDir, ".go-claude", "plugins.json")
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		t.Fatalf("expected plugins.json to be generated, but it was not")
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("failed to read generated config: %v", err)
+	}
+
+	if !strings.Contains(string(data), `"github"`) || !strings.Contains(string(data), `"@modelcontextprotocol/server-github"`) {
+		t.Errorf("expected generated config to contain github mcp server, got: %s", string(data))
+	}
+}

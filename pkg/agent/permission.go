@@ -77,6 +77,7 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			{Tool: "background_run", Content: "rm -rf /", Behavior: "deny"},
 			{Tool: "background_run", Content: "sudo *", Behavior: "deny"},
 			{Tool: "file_read", Path: "*", Behavior: "allow"},
+			{Tool: "list_directory", Behavior: "allow"},
 			{Tool: "search_grep", Behavior: "allow"},
 			{Tool: "todo", Behavior: "allow"},
 			{Tool: "task_create", Behavior: "allow"},

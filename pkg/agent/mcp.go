@@ -310,9 +310,23 @@ func (r *MCPToolRouter) LoadAndStartPlugins() error {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			defaultConfig := PluginsConfig{
+				MCPServers: map[string]MCPServerConfig{
+					"github": {
+						Command: "npx",
+						Args:    []string{"-y", "@modelcontextprotocol/server-github"},
+						Env:     []string{"GITHUB_PERSONAL_ACCESS_TOKEN="},
+					},
+				},
+			}
+			data, _ = json.MarshalIndent(defaultConfig, "", "  ")
+			_ = os.MkdirAll(filepath.Dir(cfgPath), 0755)
+			if writeErr := os.WriteFile(cfgPath, data, 0644); writeErr != nil {
+				return nil
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 
 	var config PluginsConfig

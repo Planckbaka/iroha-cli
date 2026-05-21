@@ -6,7 +6,7 @@ import (
 
 // Modern Dark / Aubergine Color Palette (Claude Code Theme)
 var (
-	ColorPrimary   = lipgloss.Color("#C084FC") // Purple/Aubergine Accent
+	ColorPrimary   = lipgloss.Color("#FFFFFF") // Pure terminal white
 	ColorSecondary = lipgloss.Color("#A1A1AA") // Zinc/Slate
 	ColorSuccess   = lipgloss.Color("#10B981") // Emerald
 	ColorWarning   = lipgloss.Color("#F59E0B") // Amber
@@ -59,7 +59,7 @@ var (
 			MarginLeft(1)
 
 	StyleThinking = lipgloss.NewStyle().
-			Foreground(ColorPrimary). // Purple spinner looks premium
+			Foreground(ColorSecondary). // Secondary gray spinner is subtle
 			Italic(true)
 
 	StyleConfirmCard = lipgloss.NewStyle().
@@ -74,5 +74,17 @@ var (
 	StyleKeyActive = lipgloss.NewStyle().
 			Foreground(ColorPrimary).
 			Bold(true)
+
+	StyleStatusBar = lipgloss.NewStyle().
+			Background(lipgloss.Color("#27272A")).
+			Foreground(lipgloss.Color("#E4E4E7")).
+			Bold(true)
+
+	StyleDiffAdd = lipgloss.NewStyle().
+			Foreground(ColorSuccess)
+
+	StyleDiffDel = lipgloss.NewStyle().
+			Foreground(ColorDanger)
 )
+
 
