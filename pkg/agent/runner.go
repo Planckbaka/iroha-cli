@@ -119,6 +119,7 @@ type CustomRunner struct {
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string) (*CustomRunner, error) {
 	// 1. Initialize Google Genkit Go SDK Registry & Plugins based on active provider
 	var g *genkit.Genkit
+	var oaiPlugin *compat_oai.OpenAICompatible
 	if provider != llm.ProviderSimulate {
 		ctx := context.Background()
 		var plugins []api.Plugin
@@ -129,19 +130,22 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		case llm.ProviderClaude:
 			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
 		case llm.ProviderGLM, llm.ProviderOpenAI, llm.ProviderDeepSeek, llm.ProviderKimi, llm.ProviderSiliconFlow:
-			oai := &compat_oai.OpenAICompatible{
+			oaiPlugin = &compat_oai.OpenAICompatible{
 				Provider: string(provider),
 				APIKey:   apiKey,
 				BaseURL:  baseURL,
 			}
-			// Explicitly register model for OpenAI-compatible dynamic schemas
-			oai.DefineModel(string(provider), modelName, ai.ModelOptions{
-				Supports: &compat_oai.BasicText,
-			})
-			plugins = append(plugins, oai)
+			plugins = append(plugins, oaiPlugin)
 		}
 
 		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
+
+		// Register model after Init so the plugin has a registry
+		if oaiPlugin != nil {
+			oaiPlugin.DefineModel(string(provider), modelName, ai.ModelOptions{
+				Supports: &compat_oai.BasicText,
+			})
+		}
 	}
 
 	// 2. Create our abstract model adapter
