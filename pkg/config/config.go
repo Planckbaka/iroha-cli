@@ -9,6 +9,29 @@ import (
 	"strings"
 )
 
+// ProviderDefaultConfig holds per-provider default values
+type ProviderDefaultConfig struct {
+	Model   string
+	BaseURL string
+	EnvKey  string
+}
+
+// ProviderDefaults maps provider names to their default configuration values
+var ProviderDefaults = map[string]ProviderDefaultConfig{
+	"glm":    {Model: "glm-4", BaseURL: "https://open.bigmodel.cn/api/paas/v4", EnvKey: "ZHIPU_API_KEY"},
+	"openai": {Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", EnvKey: "OPENAI_API_KEY"},
+	"claude": {Model: "claude-sonnet-4-6", BaseURL: "https://api.anthropic.com", EnvKey: "ANTHROPIC_API_KEY"},
+}
+
+// DefaultProviderConfig returns the ProviderDefaultConfig for a given provider,
+// falling back to GLM defaults if the provider is unknown.
+func DefaultProviderConfig(provider string) ProviderDefaultConfig {
+	if def, ok := ProviderDefaults[provider]; ok {
+		return def
+	}
+	return ProviderDefaults["glm"]
+}
+
 // Config holds LLM model and credentials configurations
 type Config struct {
 	Provider string `json:"provider"`
@@ -32,7 +55,7 @@ func LoadConfig() (*Config, error) {
 			// Default configuration (simulate mode)
 			return &Config{
 				Provider: "simulate",
-				Model:    "glm-4",
+				Model:    ProviderDefaults["glm"].Model,
 			}, nil
 		}
 		return nil, err
@@ -41,6 +64,21 @@ func LoadConfig() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+
+	// Auto-detect provider from model name for backward compatibility
+	if cfg.Provider == "" {
+		if strings.HasPrefix(cfg.Model, "glm") {
+			cfg.Provider = "glm"
+		} else if strings.HasPrefix(cfg.Model, "gpt") || strings.HasPrefix(cfg.Model, "o1") || strings.HasPrefix(cfg.Model, "o3") {
+			cfg.Provider = "openai"
+		} else if strings.HasPrefix(cfg.Model, "claude") {
+			cfg.Provider = "claude"
+		}
+		if cfg.Provider != "" {
+			fmt.Printf("  从模型名称 '%s' 推断 provider='%s'。使用 --provider 标志覆盖。\n", cfg.Model, cfg.Provider)
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -65,7 +103,7 @@ func RunConfigWizard() (*Config, error) {
 	// Load existing config to serve as defaults
 	existing, _ := LoadConfig()
 	if existing == nil {
-		existing = &Config{Provider: "simulate", Model: "glm-4"}
+		existing = &Config{Provider: "simulate", Model: ProviderDefaults["glm"].Model}
 	}
 
 	fmt.Println("\n\x1b[1;32m  go-claude CLI 配置向导 (Setup Wizard)\x1b[0m")
@@ -79,8 +117,9 @@ func RunConfigWizard() (*Config, error) {
 	fmt.Println("     [g] glm       - 智谱 AI GLM-4 官方 API")
 	fmt.Println("     [o] openai    - OpenAI 官方或任何兼容第三方 API (DeepSeek/Qwen/Ollama)")
 	fmt.Printf("     当前选择: \x1b[33m%s\x1b[0m\n", existing.Provider)
+		fmt.Println("     [c] claude    - Anthropic Claude 官方 API")
 
-	fmt.Print("     选择提供商 (s/g/o) [回车不修改]: ")
+	fmt.Print("     选择提供商 (s/g/o/c) [回车不修改]: ")
 	providerInput, _ := reader.ReadString('\n')
 	providerInput = strings.TrimSpace(strings.ToLower(providerInput))
 
@@ -91,21 +130,14 @@ func RunConfigWizard() (*Config, error) {
 		provider = "glm"
 	} else if providerInput == "o" || providerInput == "openai" {
 		provider = "openai"
+	} else if providerInput == "c" || providerInput == "claude" {
+		provider = "claude"
 	}
 
 	// 2. Determine default model and base URL based on provider
-	defaultModel := "glm-4"
-	defaultBaseURL := ""
-	if provider == "glm" {
-		defaultModel = "glm-4"
-		defaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
-	} else if provider == "openai" {
-		defaultModel = "gpt-4o"
-		defaultBaseURL = "https://api.openai.com/v1"
-	} else {
-		defaultModel = "glm-4"
-		defaultBaseURL = ""
-	}
+	defCfg := DefaultProviderConfig(provider)
+	defaultModel := defCfg.Model
+	defaultBaseURL := defCfg.BaseURL
 
 	if existing.Provider == provider {
 		defaultModel = existing.Model

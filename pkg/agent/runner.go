@@ -18,20 +18,23 @@ import (
 	"google.golang.org/genai"
 )
 
-func init() {
-	llm.NagReminderTrigger = func() string {
-		if GlobalTodoManager.RoundsSinceUpdate() >= 3 {
-			return "📌 [系统提示] 为了确保后续代码修改的连贯性，请在执行当前步骤前更新您的 todo 计划进度。"
-		}
-		return ""
+// runnerHooks implements llm.AdapterHooks using the agent package's global managers.
+type runnerHooks struct{}
+
+func (runnerHooks) NagReminder() string {
+	if GlobalTodoManager.RoundsSinceUpdate() >= 3 {
+		return "📌 [系统提示] 为了确保后续代码修改的连贯性，请在执行当前步骤前更新您的 todo 计划进度。"
 	}
-	llm.NoteRoundWithoutUpdate = func() {
-		GlobalTodoManager.NoteRoundWithoutUpdate()
-	}
-	llm.SystemPromptTrigger = func() string {
-		builder := NewSystemPromptBuilder()
-		return builder.Build()
-	}
+	return ""
+}
+
+func (runnerHooks) NoteRound() {
+	GlobalTodoManager.NoteRoundWithoutUpdate()
+}
+
+func buildSystemPrompt() string {
+	builder := NewSystemPromptBuilder()
+	return builder.Build()
 }
 
 // ConfirmationBridge synchronizes the background agent runner and the foreground TUI
@@ -76,7 +79,8 @@ type CustomRunner struct {
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string) (*CustomRunner, error) {
 	// 1. Create our abstract model adapter
-	modelAdapter, err := llm.NewAdapter(provider, modelName, apiKey, baseURL)
+	systemPrompt := buildSystemPrompt()
+	modelAdapter, err := llm.NewAdapter(provider, modelName, apiKey, baseURL, systemPrompt, runnerHooks{})
 	if err != nil {
 		return nil, fmt.Errorf("创建模型适配器失败: %w", err)
 	}
@@ -137,16 +141,8 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	// Initialize debug logging for LLM adapter
 	llm.InitDebugLog()
 
-	// 8. Configure auto-review with the same provider credentials
-	if glmAdapter, ok := modelAdapter.(interface {
-		APIKey() string
-		BaseURL() string
-	}); ok {
-		SetAutoReviewConfig(glmAdapter.APIKey(), glmAdapter.BaseURL(), modelName)
-	} else {
-		// Use simulate mode for auto-review when real adapter is unavailable
-		SetAutoReviewConfig("simulate", "", modelName)
-	}
+	// 8. Configure auto-review with the model adapter
+	SetAutoReviewConfig(modelAdapter)
 
 	// Start background CronScheduler
 	GlobalCronScheduler.Start()
@@ -168,7 +164,7 @@ func (cr *CustomRunner) GetTokenUsage() int {
 	if cr.llmModel == nil {
 		return 0
 	}
-	if adapter, ok := cr.llmModel.(interface{ CumulativeTokens() int }); ok {
+	if adapter, ok := cr.llmModel.(llm.TokenTracker); ok {
 		tokens := adapter.CumulativeTokens()
 		if tokens > 0 {
 			return tokens

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"go-claude/pkg/llm"
 )
 
 func TestHeuristicReview_SafeCommands(t *testing.T) {
@@ -59,7 +61,7 @@ func TestHeuristicReview_DangerousCommands(t *testing.T) {
 }
 
 func TestReviewCommand_SimulateMode(t *testing.T) {
-	// In simulate mode (no API key), ReviewCommand should use heuristic
+	// In simulate mode (no model), ReviewCommand should use heuristic
 	GlobalAutoReviewConfig = nil
 
 	safeResult := ReviewCommand("ls -la")
@@ -74,15 +76,16 @@ func TestReviewCommand_SimulateMode(t *testing.T) {
 }
 
 func TestSetAutoReviewConfig(t *testing.T) {
-	SetAutoReviewConfig("test-key", "http://localhost:8080", "glm-4-flash")
+	simAdapter := llm.NewSimulatedAdapter("test-model", "", nil)
+	SetAutoReviewConfig(simAdapter)
 
 	if GlobalAutoReviewConfig == nil {
 		t.Fatal("Expected GlobalAutoReviewConfig to be set")
 	}
-	if GlobalAutoReviewConfig.APIKey != "test-key" {
-		t.Errorf("Expected APIKey=test-key, got %s", GlobalAutoReviewConfig.APIKey)
+	if GlobalAutoReviewConfig.Model == nil {
+		t.Fatal("Expected Model to be set")
 	}
-	if GlobalAutoReviewConfig.Model != "glm-4-flash" {
-		t.Errorf("Expected Model=glm-4-flash, got %s", GlobalAutoReviewConfig.Model)
+	if GlobalAutoReviewConfig.Model.Name() != "test-model" {
+		t.Errorf("Expected model name test-model, got %s", GlobalAutoReviewConfig.Model.Name())
 	}
 }

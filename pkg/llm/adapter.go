@@ -22,29 +22,44 @@ const (
 	ProviderSimulate ProviderType = "simulate"
 )
 
-// NewAdapter creates a new model.LLM based on the provider, model name, apiKey, and optional baseURL
-func NewAdapter(provider ProviderType, modelName string, apiKey string, baseURL string) (model.LLM, error) {
+// AdapterHooks provides runtime callbacks for adapter behavior.
+type AdapterHooks interface {
+	NagReminder() string
+	NoteRound()
+}
+
+// TokenTracker tracks cumulative token usage across adapter calls.
+type TokenTracker interface {
+	CumulativeTokens() int
+	AddTokens(n int)
+}
+
+// NewAdapter creates a new model.LLM based on the provider, model name, apiKey, optional baseURL,
+// a systemPrompt string, and runtime hooks.
+func NewAdapter(provider ProviderType, modelName string, apiKey string, baseURL string, systemPrompt string, hooks AdapterHooks) (model.LLM, error) {
 	switch provider {
 	case ProviderSimulate:
-		return NewSimulatedAdapter(modelName), nil
+		return NewSimulatedAdapter(modelName, systemPrompt, hooks), nil
 	case ProviderGemini:
-		// Wrap Gemini initialization. We can use the mock or real client here.
-		return NewSimulatedAdapter("gemini-2.5-flash-simulated"), nil
+		return NewSimulatedAdapter("gemini-2.5-flash-simulated", systemPrompt, hooks), nil
 	case ProviderGLM, ProviderOpenAI:
-		return NewGLMAdapter(modelName, apiKey, baseURL), nil
+		return NewOpenAICompatibleAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil
+	case ProviderClaude:
+		return NewAnthropicAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil
 	default:
-		return NewSimulatedAdapter(string(provider) + "-" + modelName + "-simulated"), nil
+		return NewSimulatedAdapter(string(provider)+"-"+modelName+"-simulated", systemPrompt, hooks), nil
 	}
 }
 
 // SimulatedAdapter is an offline mock LLM that generates streaming text and tool calls.
-// This ensures that the CLI has a premium, immediately working demo out of the box.
 type SimulatedAdapter struct {
-	modelName string
+	modelName    string
+	systemPrompt string
+	hooks        AdapterHooks
 }
 
-func NewSimulatedAdapter(name string) *SimulatedAdapter {
-	return &SimulatedAdapter{modelName: name}
+func NewSimulatedAdapter(name string, systemPrompt string, hooks AdapterHooks) *SimulatedAdapter {
+	return &SimulatedAdapter{modelName: name, systemPrompt: systemPrompt, hooks: hooks}
 }
 
 func (s *SimulatedAdapter) Name() string {
@@ -55,8 +70,8 @@ func (s *SimulatedAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// Build dynamic system prompt
 		var systemPrompt string
-		if SystemPromptTrigger != nil {
-			systemPrompt = SystemPromptTrigger()
+		if s.systemPrompt != "" {
+			systemPrompt = s.systemPrompt
 		} else if req.Config != nil && req.Config.SystemInstruction != nil {
 			var parts []string
 			for _, p := range req.Config.SystemInstruction.Parts {

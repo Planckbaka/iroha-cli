@@ -56,11 +56,8 @@ func main() {
 	} else if cfg.Model != "" {
 		finalModel = cfg.Model
 	} else {
-		if finalProvider == "openai" {
-			finalModel = "gpt-4o"
-		} else {
-			finalModel = "glm-4"
-		}
+		defCfg := config.DefaultProviderConfig(finalProvider)
+		finalModel = defCfg.Model
 	}
 
 	// BaseURL resolution
@@ -69,28 +66,15 @@ func main() {
 	} else if cfg.BaseURL != "" {
 		finalBaseURL = cfg.BaseURL
 	} else {
-		if finalProvider == "glm" {
-			finalBaseURL = "https://open.bigmodel.cn/api/paas/v4"
-		} else if finalProvider == "openai" {
-			finalBaseURL = "https://api.openai.com/v1"
-		}
+		finalBaseURL = config.DefaultProviderConfig(finalProvider).BaseURL
 	}
 
 	// APIKey resolution (includes env vars fallback)
 	if setFlags["apikey"] {
 		finalAPIKey = *apiKeyFlag
 	} else {
-		var envKey string
-		switch finalProvider {
-		case "gemini":
-			envKey = os.Getenv("GEMINI_API_KEY")
-		case "claude":
-			envKey = os.Getenv("ANTHROPIC_API_KEY")
-		case "openai":
-			envKey = os.Getenv("OPENAI_API_KEY")
-		case "glm":
-			envKey = os.Getenv("ZHIPU_API_KEY")
-		}
+		defCfg := config.DefaultProviderConfig(finalProvider)
+		envKey := os.Getenv(defCfg.EnvKey)
 
 		if envKey != "" {
 			finalAPIKey = envKey

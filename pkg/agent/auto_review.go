@@ -1,14 +1,16 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
+
+	"go-claude/pkg/llm"
+
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // AutoReviewResult represents the LLM's safety judgment for a shell command
@@ -17,25 +19,18 @@ type AutoReviewResult struct {
 	Reason string // human-readable explanation
 }
 
-// autoReviewConfig holds the API config for the safety reviewer
+// autoReviewConfig holds the LLM model for the safety reviewer
 type autoReviewConfig struct {
-	APIKey  string
-	BaseURL string
-	Model   string
+	Model model.LLM
 }
 
 // GlobalAutoReviewConfig is set at startup from the LLM provider config
 var GlobalAutoReviewConfig *autoReviewConfig
 
 // SetAutoReviewConfig configures the auto-review LLM from runner startup
-func SetAutoReviewConfig(apiKey, baseURL, modelName string) {
-	if modelName == "" {
-		modelName = "glm-4-flash" // Use a fast/cheap model for safety checks
-	}
+func SetAutoReviewConfig(m model.LLM) {
 	GlobalAutoReviewConfig = &autoReviewConfig{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   modelName,
+		Model: m,
 	}
 }
 
@@ -57,9 +52,7 @@ const autoReviewSystemPrompt = `你是一个严格的安全审查员，负责评
 // ReviewCommand asks the configured LLM whether a shell command is safe.
 // If no LLM is configured (simulate mode), falls back to heuristic judgment.
 func ReviewCommand(cmd string) AutoReviewResult {
-	if GlobalAutoReviewConfig == nil ||
-		GlobalAutoReviewConfig.APIKey == "" ||
-		GlobalAutoReviewConfig.APIKey == "simulate" {
+	if GlobalAutoReviewConfig == nil || GlobalAutoReviewConfig.Model == nil {
 		return heuristicReview(cmd)
 	}
 
@@ -68,84 +61,39 @@ func ReviewCommand(cmd string) AutoReviewResult {
 
 	result, err := callLLMForReview(ctx, GlobalAutoReviewConfig, cmd)
 	if err != nil {
-		// On error, fall back to heuristic — never block on LLM failure
 		return heuristicReview(cmd)
 	}
 	return result
 }
 
-// callLLMForReview makes a non-streaming LLM call for safety judgment
+// callLLMForReview makes a non-streaming LLM call for safety judgment via model.LLM
 func callLLMForReview(ctx context.Context, cfg *autoReviewConfig, cmd string) (AutoReviewResult, error) {
-	apiURL := cfg.BaseURL
-	if apiURL == "" {
-		apiURL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-	} else if !strings.HasSuffix(apiURL, "/chat/completions") {
-		apiURL = strings.TrimSuffix(apiURL, "/") + "/chat/completions"
-	}
-
-	type message struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	type request struct {
-		Model    string    `json:"model"`
-		Messages []message `json:"messages"`
-		Stream   bool      `json:"stream"`
-	}
-	type choice struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-	type response struct {
-		Choices []choice `json:"choices"`
-	}
-
-	reqBody := request{
-		Model: cfg.Model,
-		Messages: []message{
-			{Role: "system", Content: autoReviewSystemPrompt},
-			{Role: "user", Content: fmt.Sprintf("请审查以下 Shell 命令：\n```\n%s\n```", cmd)},
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: fmt.Sprintf("请审查以下 Shell 命令：\n```\n%s\n```", cmd)},
+				},
+			},
 		},
-		Stream: false,
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Role: "system",
+				Parts: []*genai.Part{
+					{Text: autoReviewSystemPrompt},
+				},
+			},
+		},
 	}
 
-	reqBytes, err := json.Marshal(reqBody)
+	content, err := llm.CollectNonStreaming(ctx, cfg.Model, req)
 	if err != nil {
-		return AutoReviewResult{}, fmt.Errorf("序列化请求失败: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return AutoReviewResult{}, fmt.Errorf("创建请求失败: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return AutoReviewResult{}, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return AutoReviewResult{}, fmt.Errorf("API 错误 %d: %s", resp.StatusCode, string(body))
-	}
-
-	var apiResp response
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return AutoReviewResult{}, fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	if len(apiResp.Choices) == 0 || apiResp.Choices[0].Message.Content == "" {
-		return AutoReviewResult{}, fmt.Errorf("空响应")
+		return AutoReviewResult{}, err
 	}
 
 	// Parse LLM JSON output
-	content := strings.TrimSpace(apiResp.Choices[0].Message.Content)
-	// Strip markdown code fences if present
+	content = strings.TrimSpace(content)
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
 	content = strings.TrimSuffix(content, "```")
@@ -156,7 +104,6 @@ func callLLMForReview(ctx context.Context, cfg *autoReviewConfig, cmd string) (A
 		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		// If we can't parse, play it safe
 		return AutoReviewResult{Safe: false, Reason: "AI 审查响应格式错误，交由人工确认"}, nil
 	}
 
@@ -169,7 +116,6 @@ func heuristicReview(cmd string) AutoReviewResult {
 	trimmed := strings.TrimSpace(strings.ToLower(cmd))
 
 	// Check dangerous patterns FIRST — before safe commands
-	// This ensures "echo hello > file.txt" is caught by ">" before "echo" matches
 	dangerousPatterns := []string{
 		"rm ", "rmdir", "mv ", "cp ", "chmod", "chown",
 		"curl", "wget", "nc ", "ssh", "scp", "rsync",
