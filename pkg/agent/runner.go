@@ -4,17 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"iroha/pkg/llm"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/anthropic"
-	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -118,34 +117,20 @@ type CustomRunner struct {
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string) (*CustomRunner, error) {
 	// 1. Initialize Google Genkit Go SDK Registry & Plugins based on active provider
+	// Only initialize Genkit for providers that use the Genkit adapter (Gemini, Claude).
+	// OpenAI-compatible providers use the direct adapter and don't need Genkit.
 	var g *genkit.Genkit
-	var oaiPlugin *compat_oai.OpenAICompatible
-	if provider != llm.ProviderSimulate {
+	switch provider {
+	case llm.ProviderGemini, llm.ProviderClaude:
 		ctx := context.Background()
 		var plugins []api.Plugin
-
 		switch provider {
 		case llm.ProviderGemini:
 			plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
 		case llm.ProviderClaude:
 			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
-		case llm.ProviderGLM, llm.ProviderOpenAI, llm.ProviderDeepSeek, llm.ProviderKimi, llm.ProviderSiliconFlow:
-			oaiPlugin = &compat_oai.OpenAICompatible{
-				Provider: string(provider),
-				APIKey:   apiKey,
-				BaseURL:  baseURL,
-			}
-			plugins = append(plugins, oaiPlugin)
 		}
-
 		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
-
-		// Register model after Init so the plugin has a registry
-		if oaiPlugin != nil {
-			oaiPlugin.DefineModel(string(provider), modelName, ai.ModelOptions{
-				Supports: &compat_oai.BasicText,
-			})
-		}
 	}
 
 	// 2. Create our abstract model adapter
@@ -252,6 +237,13 @@ func (cr *CustomRunner) GetTokenUsage() int {
 // Execute handles running a prompt asynchronously and piping events to a callback
 func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt string, onEvent func(*session.Event), onError func(error), onDone func()) {
 	GlobalToolCircuitBreaker.Reset()
+	GlobalLogger.SetSessionID(sessionID)
+
+	LogAudit(CatUserInput, "user_prompt", "User submitted a prompt to the agent", map[string]any{
+		"user_id":    userID,
+		"session_id": sessionID,
+		"prompt":     prompt,
+	})
 
 	// Reset the cancel channel for this execution turn
 	Bridge.CancelChan = make(chan struct{})
@@ -261,6 +253,17 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 	}()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := fmt.Errorf("panic in agent execution: %v\n%s", r, debug.Stack())
+				LogError(CatSystem, "runner_panic", "Agent execution panicked", err, map[string]any{
+					"session_id": sessionID,
+				})
+				onError(err)
+				onDone()
+			}
+		}()
+
 		// Drain background task notifications
 		bgNotifs := GlobalBackgroundManager.DrainNotifications()
 		// Drain cron scheduler notifications
@@ -313,6 +316,9 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 				return
 			}
 			if err != nil {
+				LogError(CatSystem, "runner_event_error", "Error received during agent run loop event streaming", err, map[string]any{
+					"session_id": sessionID,
+				})
 				onError(err)
 				return
 			}
@@ -320,6 +326,10 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 				onEvent(ev)
 			}
 		}
+
+		LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
+			"session_id": sessionID,
+		})
 		onDone()
 	}()
 }
@@ -558,6 +568,11 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 		Running: true,
 	})
 
+	LogInfo(CatToolCall, "tool_start", fmt.Sprintf("Starting tool execution: %s", b.Name()), map[string]any{
+		"tool": b.Name(),
+		"args": args,
+	})
+
 	hookCtx := HookContext{
 		ToolName:  b.Name(),
 		ToolInput: args,
@@ -568,6 +583,12 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	if preResult.Blocked {
 		err := fmt.Errorf("🪝 [Hook 拦截] 工具 %s 被 PreToolUse Hook 阻断: %s", b.Name(), preResult.BlockReason)
+		durationMS := time.Since(startTime).Milliseconds()
+		LogAudit(CatToolCall, "tool_hook_blocked", fmt.Sprintf("Tool %s blocked by PreToolUse hook", b.Name()), map[string]any{
+			"tool":        b.Name(),
+			"reason":      preResult.BlockReason,
+			"duration_ms": durationMS,
+		})
 		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
@@ -581,6 +602,7 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	// ── Stage B: Execute the real tool ───────────────────────────────────
 	result, err := runnable.Run(ctx, args)
+	durationMS := time.Since(startTime).Milliseconds()
 
 	// Circuit breaker check
 	isFailure := err != nil
@@ -597,6 +619,12 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	count := GlobalToolCircuitBreaker.Track(b.Name(), args, isFailure)
 	if isFailure && count >= 3 {
 		err = fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
+		LogAudit(CatToolCall, "tool_circuit_breaker_blocked", fmt.Sprintf("Tool %s blocked by circuit breaker", b.Name()), map[string]any{
+			"tool":        b.Name(),
+			"args":        args,
+			"failures":    count,
+			"duration_ms": durationMS,
+		})
 		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
@@ -609,6 +637,11 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	}
 
 	if err != nil {
+		LogError(CatToolCall, "tool_failed", fmt.Sprintf("Tool %s execution failed after %dms", b.Name(), durationMS), err, map[string]any{
+			"tool":        b.Name(),
+			"args":        args,
+			"duration_ms": durationMS,
+		})
 		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,
@@ -640,6 +673,19 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 		Running:  false,
 		Success:  true,
 		Duration: time.Since(startTime),
+	})
+
+	GlobalLogger.Log(LevelInfo, CatToolCall, "tool_success", fmt.Sprintf("Tool %s completed successfully", b.Name()), durationMS, map[string]any{
+		"tool":        b.Name(),
+		"duration_ms": durationMS,
+		"result_keys": func() []string {
+			var keys []string
+			for k := range result {
+				keys = append(keys, k)
+			}
+			return keys
+		}(),
+		"has_hook_notes": len(allMessages) > 0,
 	})
 
 	return result, nil

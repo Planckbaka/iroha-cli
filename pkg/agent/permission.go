@@ -124,14 +124,20 @@ func (pm *PermissionManager) SetMode(mode PermissionMode) error {
 	if mode != ModeDefault && mode != ModePlan && mode != ModeAuto {
 		return fmt.Errorf("invalid mode: %s", mode)
 	}
+	oldMode := pm.mode
 	pm.mode = mode
+	LogAudit(CatSecurity, "mode_change", fmt.Sprintf("Permission mode changed from '%s' to '%s'", oldMode, mode), map[string]any{
+		"old_mode": oldMode,
+		"new_mode": mode,
+	})
 	return nil
 }
 
 func (pm *PermissionManager) GetMode() PermissionMode {
 	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	return pm.mode
+	m := pm.mode
+	pm.mu.RUnlock()
+	return m
 }
 
 func (pm *PermissionManager) GetRules() []PermissionRule {
@@ -146,11 +152,19 @@ func (pm *PermissionManager) AddRule(rule PermissionRule) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.rules = append(pm.rules, rule)
+	LogAudit(CatSecurity, "rule_add", fmt.Sprintf("Security rule added: %s %s -> %s", rule.Tool, rule.Path, rule.Behavior), map[string]any{
+		"rule": rule,
+	})
 }
 
 func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
+
+	LogInfo(CatSecurity, "check_start", fmt.Sprintf("Evaluating permissions for tool '%s'", toolName), map[string]any{
+		"tool": toolName,
+		"args": args,
+	})
 
 	// Step 0: Bash security validation (for bash command writes)
 	if toolName == "shell_run" || toolName == "background_run" {
@@ -174,10 +188,22 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 			desc := strings.Join(failures, ", ")
 			if isSevere {
 				pm.consecutiveDenials++
-				return "deny", fmt.Sprintf("Security Gate: dangerous pattern detected: %s", desc)
+				reason := fmt.Sprintf("Security Gate: dangerous pattern detected: %s", desc)
+				LogAudit(CatSecurity, "security_gate_deny", reason, map[string]any{
+					"tool":     toolName,
+					"command":  cmdStr,
+					"failures": failures,
+				})
+				return "deny", reason
 			}
 			// Other patterns escalate to ask
-			return "ask", fmt.Sprintf("Security Gate warning: %s", desc)
+			reason := fmt.Sprintf("Security Gate warning: %s", desc)
+			LogWarn(CatSecurity, "security_gate_warn", reason, map[string]any{
+				"tool":     toolName,
+				"command":  cmdStr,
+				"failures": failures,
+			})
+			return "ask", reason
 		}
 	}
 
@@ -188,7 +214,13 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 		}
 		if pm.matches(rule, toolName, args) {
 			pm.consecutiveDenials++
-			return "deny", fmt.Sprintf("Blocked by deny rule: %v", rule)
+			reason := fmt.Sprintf("Blocked by deny rule: %v", rule)
+			LogAudit(CatSecurity, "rule_deny", reason, map[string]any{
+				"tool": toolName,
+				"args": args,
+				"rule": rule,
+			})
+			return "deny", reason
 		}
 	}
 
@@ -198,12 +230,22 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 
 	if pm.mode == ModePlan && isWrite {
 		pm.consecutiveDenials++
-		return "deny", "Blocked by Plan mode: write operations are forbidden"
+		reason := "Blocked by Plan mode: write operations are forbidden"
+		LogAudit(CatSecurity, "mode_plan_block", reason, map[string]any{
+			"tool": toolName,
+			"args": args,
+		})
+		return "deny", reason
 	}
 
 	if pm.mode == ModeAuto && isRead {
 		pm.consecutiveDenials = 0
-		return "allow", "Auto mode: read operations auto-approved"
+		reason := "Auto mode: read operations auto-approved"
+		LogAudit(CatSecurity, "mode_auto_allow", reason, map[string]any{
+			"tool": toolName,
+			"args": args,
+		})
+		return "allow", reason
 	}
 
 	// Step 3: Allow rules
@@ -213,24 +255,39 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 		}
 		if pm.matches(rule, toolName, args) {
 			pm.consecutiveDenials = 0
-			return "allow", fmt.Sprintf("Approved by allow rule: %v", rule)
+			reason := fmt.Sprintf("Approved by allow rule: %v", rule)
+			LogAudit(CatSecurity, "rule_allow", reason, map[string]any{
+				"tool": toolName,
+				"args": args,
+				"rule": rule,
+			})
+			return "allow", reason
 		}
 	}
 
 	// Step 4: Ask user
-	return "ask", "No matching rules, requiring user confirmation"
+	reason := "No matching rules, requiring user confirmation"
+	LogInfo(CatSecurity, "confirmation_escalate", reason, map[string]any{
+		"tool": toolName,
+		"args": args,
+	})
+	return "ask", reason
 }
 
 func (pm *PermissionManager) NoteApproval() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.consecutiveDenials = 0
+	LogAudit(CatSecurity, "human_allow", "Human approved sensitive operation", nil)
 }
 
 func (pm *PermissionManager) NoteDenial() int {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.consecutiveDenials++
+	LogAudit(CatSecurity, "human_deny", "Human denied sensitive operation", map[string]any{
+		"consecutive_denials": pm.consecutiveDenials,
+	})
 	return pm.consecutiveDenials
 }
 
@@ -244,6 +301,7 @@ func (pm *PermissionManager) ResetConsecutiveDenials() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.consecutiveDenials = 0
+	LogInfo(CatSecurity, "reset_denials", "Consecutive denials count reset to 0", nil)
 }
 
 func (pm *PermissionManager) matches(rule PermissionRule, toolName string, args any) bool {

@@ -55,8 +55,14 @@ func NewPersistentSessionService(delegate session.Service, sessionsDir string) *
 func (s *PersistentSessionService) Create(ctx context.Context, req *session.CreateRequest) (*session.CreateResponse, error) {
 	resp, err := s.delegate.Create(ctx, req)
 	if err != nil {
+		LogError(CatSession, "session_create_failed", "Failed to create session in memory delegate", err, map[string]any{"request": req})
 		return nil, err
 	}
+	LogInfo(CatSession, "session_create", fmt.Sprintf("Session '%s' created for user '%s'", resp.Session.ID(), resp.Session.UserID()), map[string]any{
+		"session_id": resp.Session.ID(),
+		"app_name":   resp.Session.AppName(),
+		"user_id":    resp.Session.UserID(),
+	})
 	if err := s.SaveSession(ctx, resp.Session); err != nil {
 		// Log error but do not fail the execution
 		fmt.Fprintf(os.Stderr, "警告: 无法持久化新建会话: %v\n", err)
@@ -78,13 +84,21 @@ func (s *PersistentSessionService) List(ctx context.Context, req *session.ListRe
 func (s *PersistentSessionService) Delete(ctx context.Context, req *session.DeleteRequest) error {
 	err := s.delegate.Delete(ctx, req)
 	if err != nil {
+		LogError(CatSession, "session_delete_failed", "Failed to delete session from memory delegate", err, map[string]any{"session_id": req.SessionID})
 		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	filePath := filepath.Join(s.sessionsDir, req.SessionID+".json")
-	_ = os.Remove(filePath)
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		LogError(CatSession, "session_file_delete_failed", fmt.Sprintf("Failed to delete session file: %s", filePath), err, map[string]any{"session_id": req.SessionID, "path": filePath})
+	} else {
+		LogInfo(CatSession, "session_delete", fmt.Sprintf("Session '%s' deleted successfully", req.SessionID), map[string]any{
+			"session_id": req.SessionID,
+			"path":       filePath,
+		})
+	}
 	return nil
 }
 
@@ -140,11 +154,23 @@ func (s *PersistentSessionService) SaveSession(ctx context.Context, sess session
 
 	data, err := json.MarshalIndent(serialized, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal session %s failed: %w", sess.ID(), err)
+		errWrap := fmt.Errorf("marshal session %s failed: %w", sess.ID(), err)
+		LogError(CatSession, "session_marshal_failed", "Failed to marshal session JSON", errWrap, map[string]any{"session_id": sess.ID()})
+		return errWrap
 	}
 
 	filePath := filepath.Join(s.sessionsDir, sess.ID()+".json")
-	return os.WriteFile(filePath, data, 0644)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		LogError(CatSession, "session_write_failed", fmt.Sprintf("Failed to write session file to path: %s", filePath), err, map[string]any{"session_id": sess.ID(), "path": filePath})
+		return err
+	}
+
+	LogInfo(CatSession, "session_save", fmt.Sprintf("Session '%s' saved successfully to disk", sess.ID()), map[string]any{
+		"session_id":  sess.ID(),
+		"path":        filePath,
+		"event_count": len(events),
+	})
+	return nil
 }
 
 // LoadSessions parses all session JSON files and hydates the delegate memory service.
@@ -157,9 +183,11 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 		return nil
 	}
 	if err != nil {
+		LogError(CatSession, "load_sessions_failed", "Failed to read sessions directory", err, map[string]any{"directory": s.sessionsDir})
 		return err
 	}
 
+	loadedCount := 0
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
 			continue
@@ -168,11 +196,13 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 		filePath := filepath.Join(s.sessionsDir, file.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
+			LogError(CatSession, "session_read_failed", fmt.Sprintf("Failed to read session file: %s", filePath), err, map[string]any{"path": filePath})
 			continue
 		}
 
 		var serialized SerializedSession
 		if err := json.Unmarshal(data, &serialized); err != nil {
+			LogError(CatSession, "session_unmarshal_failed", fmt.Sprintf("Failed to unmarshal session file: %s", filePath), err, map[string]any{"path": filePath})
 			continue
 		}
 
@@ -184,6 +214,7 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 			State:     serialized.State,
 		})
 		if err != nil {
+			LogError(CatSession, "session_recreate_failed", fmt.Sprintf("Failed to recreate session '%s' in memory delegate during load", serialized.ID), err, map[string]any{"session_id": serialized.ID})
 			continue
 		}
 
@@ -191,8 +222,13 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 		for _, ev := range serialized.Events {
 			_ = s.delegate.AppendEvent(ctx, res.Session, ev)
 		}
+		loadedCount++
 	}
 
+	LogInfo(CatSession, "sessions_load_completed", fmt.Sprintf("Successfully loaded %d sessions from disk", loadedCount), map[string]any{
+		"loaded_count": loadedCount,
+		"directory":    s.sessionsDir,
+	})
 	return nil
 }
 
@@ -255,12 +291,16 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 	originalPath := filepath.Join(s.sessionsDir, originalID+".json")
 	data, err := os.ReadFile(originalPath)
 	if err != nil {
-		return fmt.Errorf("read original session file failed: %w", err)
+		errWrap := fmt.Errorf("read original session file failed: %w", err)
+		LogError(CatSession, "session_fork_failed", fmt.Sprintf("Failed to read original session file for fork: %s", originalPath), errWrap, map[string]any{"original_id": originalID, "new_id": newID})
+		return errWrap
 	}
 
 	var serialized SerializedSession
 	if err := json.Unmarshal(data, &serialized); err != nil {
-		return fmt.Errorf("unmarshal original session failed: %w", err)
+		errWrap := fmt.Errorf("unmarshal original session failed: %w", err)
+		LogError(CatSession, "session_fork_failed", "Failed to unmarshal original session during fork", errWrap, map[string]any{"original_id": originalID, "new_id": newID})
+		return errWrap
 	}
 
 	// Update with new session identity
@@ -271,9 +311,11 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 	clonedPath := filepath.Join(s.sessionsDir, newID+".json")
 	clonedData, err := json.MarshalIndent(serialized, "", "  ")
 	if err != nil {
+		LogError(CatSession, "session_fork_failed", "Failed to marshal cloned session during fork", err, map[string]any{"original_id": originalID, "new_id": newID})
 		return err
 	}
 	if err := os.WriteFile(clonedPath, clonedData, 0644); err != nil {
+		LogError(CatSession, "session_fork_failed", fmt.Sprintf("Failed to write cloned session file: %s", clonedPath), err, map[string]any{"original_id": originalID, "new_id": newID, "cloned_path": clonedPath})
 		return err
 	}
 
@@ -285,6 +327,7 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 		State:     serialized.State,
 	})
 	if err != nil {
+		LogError(CatSession, "session_fork_failed", "Failed to create cloned session in memory delegate", err, map[string]any{"original_id": originalID, "new_id": newID})
 		return err
 	}
 
@@ -292,6 +335,10 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 		_ = s.delegate.AppendEvent(ctx, res.Session, ev)
 	}
 
+	LogAudit(CatSession, "session_fork", fmt.Sprintf("Successfully forked session '%s' into '%s'", originalID, newID), map[string]any{
+		"original_id": originalID,
+		"new_id":      newID,
+	})
 	return nil
 }
 

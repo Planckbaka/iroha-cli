@@ -141,12 +141,19 @@ func (hm *HookManager) loadFile(path string) {
 	}
 	var cfg HookConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		LogError(CatSession, "hook_parse_failed", fmt.Sprintf("Failed to parse hooks config file: %s", path), err, map[string]any{"path": path})
 		return // bad JSON — silently skip
 	}
+	loadedCount := 0
 	for event, defs := range cfg.Hooks {
 		hm.hooks[event] = append(hm.hooks[event], defs...)
+		loadedCount += len(defs)
 	}
 	hm.sources = append(hm.sources, path)
+	LogInfo(CatSession, "hook_load_success", fmt.Sprintf("Successfully loaded %d hooks from %s", loadedCount, path), map[string]any{
+		"path":         path,
+		"loaded_count": loadedCount,
+	})
 }
 
 // GetSources returns the config paths that were successfully loaded.
@@ -210,6 +217,7 @@ func (hm *HookManager) RunHooks(event HookEvent, ctx HookContext) HookResult {
 
 // runOne executes a single hook command and interprets its exit code.
 func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) HookResult {
+	start := time.Now()
 	// Build environment: standard env + hook context vars
 	inputJSON, _ := json.Marshal(ctx.ToolInput)
 	extraEnv := []string{
@@ -232,6 +240,7 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	durationMS := time.Since(start).Milliseconds()
 
 	// Determine exit code
 	exitCode := 0
@@ -239,6 +248,12 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 		if execCtx.Err() != nil {
 			// Timeout — treat as continue (log only)
 			fmt.Fprintf(os.Stderr, "[hook:%s] timeout (%v)\n", event, hm.timeout)
+			LogError(CatSession, "hook_timeout", fmt.Sprintf("Hook command timed out after %v", hm.timeout), execCtx.Err(), map[string]any{
+				"event":       event,
+				"command":     def.Command,
+				"tool":        ctx.ToolName,
+				"duration_ms": durationMS,
+			})
 			return HookResult{}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -250,7 +265,12 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 
 	switch exitCode {
 	case 0:
-		// Continue silently
+		LogInfo(CatSession, "hook_execute_success", "Hook executed successfully with exit code 0", map[string]any{
+			"event":       event,
+			"command":     def.Command,
+			"tool":        ctx.ToolName,
+			"duration_ms": durationMS,
+		})
 		return HookResult{}
 
 	case 1:
@@ -259,18 +279,41 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 		if reason == "" {
 			reason = "blocked by hook (no message)"
 		}
+		LogAudit(CatSecurity, "hook_execute_blocked", fmt.Sprintf("Hook blocked operation: %s", reason), map[string]any{
+			"event":       event,
+			"command":     def.Command,
+			"tool":        ctx.ToolName,
+			"reason":      reason,
+			"duration_ms": durationMS,
+		})
 		return HookResult{Blocked: true, BlockReason: reason}
 
 	case 2:
 		// Inject: stderr is appended as a message
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
+			LogInfo(CatSession, "hook_execute_injected", "Hook injected message into conversation", map[string]any{
+				"event":       event,
+				"command":     def.Command,
+				"tool":        ctx.ToolName,
+				"message":     msg,
+				"duration_ms": durationMS,
+			})
 			return HookResult{Messages: []string{msg}}
 		}
 		return HookResult{}
 
 	default:
-		// Unknown exit code — treat as continue
+		// Unknown exit code — treat as continue (log warning)
+		LogWarn(CatSession, "hook_execute_unknown_code", fmt.Sprintf("Hook executed with unexpected exit code: %d", exitCode), map[string]any{
+			"event":       event,
+			"command":     def.Command,
+			"tool":        ctx.ToolName,
+			"exit_code":   exitCode,
+			"duration_ms": durationMS,
+			"stderr":      stderr.String(),
+			"stdout":      stdout.String(),
+		})
 		return HookResult{}
 	}
 }

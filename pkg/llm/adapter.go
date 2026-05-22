@@ -45,37 +45,33 @@ func NewAdapter(g *genkit.Genkit, provider ProviderType, modelName string, apiKe
 		return NewSimulatedAdapter(modelName, systemPrompt, hooks), nil
 	}
 
-	if g != nil {
-		genkitModelName := modelName
-		switch provider {
-		case ProviderGemini:
-			if !strings.HasPrefix(genkitModelName, "googleai/") {
-				genkitModelName = "googleai/" + genkitModelName
-			}
-		case ProviderClaude:
-			if !strings.HasPrefix(genkitModelName, "anthropic/") {
-				genkitModelName = "anthropic/" + genkitModelName
-			}
-		default:
-			// OpenAI compatible
-			pref := string(provider) + "/"
-			if !strings.HasPrefix(genkitModelName, pref) {
-				genkitModelName = pref + genkitModelName
-			}
-		}
-		return NewGenkitModelAdapter(g, genkitModelName, systemPrompt, hooks), nil
-	}
-
+	// Use direct adapters for OpenAI-compatible providers — they handle tool calling natively.
+	// Genkit adapter is reserved for Gemini and Anthropic providers that benefit from SDK integration.
 	switch provider {
-	case ProviderGemini:
-		return NewSimulatedAdapter("gemini-2.5-flash-simulated", systemPrompt, hooks), nil
 	case ProviderGLM, ProviderOpenAI, ProviderDeepSeek, ProviderKimi, ProviderSiliconFlow:
 		return NewOpenAICompatibleAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil
 	case ProviderClaude:
+		if g != nil {
+			genkitModelName := modelName
+			if !strings.HasPrefix(genkitModelName, "anthropic/") {
+				genkitModelName = "anthropic/" + genkitModelName
+			}
+			return NewGenkitModelAdapter(g, genkitModelName, systemPrompt, hooks), nil
+		}
 		return NewAnthropicAdapter(modelName, apiKey, baseURL, systemPrompt, hooks), nil
+	case ProviderGemini:
+		if g != nil {
+			genkitModelName := modelName
+			if !strings.HasPrefix(genkitModelName, "googleai/") {
+				genkitModelName = "googleai/" + genkitModelName
+			}
+			return NewGenkitModelAdapter(g, genkitModelName, systemPrompt, hooks), nil
+		}
+		return NewSimulatedAdapter("gemini-2.5-flash-simulated", systemPrompt, hooks), nil
 	default:
 		return NewSimulatedAdapter(string(provider)+"-"+modelName+"-simulated", systemPrompt, hooks), nil
 	}
+
 }
 
 // SimulatedAdapter is an offline mock LLM that generates streaming text and tool calls.

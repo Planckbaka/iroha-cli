@@ -136,24 +136,29 @@ func (m *GenkitModelAdapter) GenerateContent(ctx context.Context, req *model.LLM
 		var opts []ai.GenerateOption
 		opts = append(opts, ai.WithModelName(m.modelName))
 		opts = append(opts, ai.WithMessages(messages...))
+		opts = append(opts, ai.WithReturnToolRequests(true))
 
-		// Map generation configurations
+		// Map generation configurations — compat_oai requires map[string]any, not GenerationCommonConfig
 		if req.Config != nil {
-			var commonConfig ai.GenerationCommonConfig
+			cfgMap := make(map[string]any)
 			if req.Config.Temperature != nil {
-				commonConfig.Temperature = float64(*req.Config.Temperature)
+				cfgMap["temperature"] = float64(*req.Config.Temperature)
 			}
 			if req.Config.MaxOutputTokens != 0 {
-				commonConfig.MaxOutputTokens = int(req.Config.MaxOutputTokens)
+				cfgMap["maxOutputTokens"] = int(req.Config.MaxOutputTokens)
 			}
-			commonConfig.StopSequences = req.Config.StopSequences
+			if len(req.Config.StopSequences) > 0 {
+				cfgMap["stopSequences"] = req.Config.StopSequences
+			}
 			if req.Config.TopK != nil {
-				commonConfig.TopK = int(*req.Config.TopK)
+				cfgMap["topK"] = int(*req.Config.TopK)
 			}
 			if req.Config.TopP != nil {
-				commonConfig.TopP = float64(*req.Config.TopP)
+				cfgMap["topP"] = float64(*req.Config.TopP)
 			}
-			opts = append(opts, ai.WithConfig(&commonConfig))
+			if len(cfgMap) > 0 {
+				opts = append(opts, ai.WithConfig(cfgMap))
+			}
 
 			// Map tools dynamically
 			if len(req.Config.Tools) > 0 {
@@ -208,6 +213,7 @@ func (m *GenkitModelAdapter) GenerateContent(ctx context.Context, req *model.LLM
 
 				if val.Done {
 					if val.Response != nil {
+						DebugLog("[GenkitAdapter] Stream Done: text=%q toolReqs=%d", val.Response.Text(), len(val.Response.ToolRequests()))
 						if val.Response.Usage != nil {
 							m.AddTokens(val.Response.Usage.TotalTokens)
 						}
