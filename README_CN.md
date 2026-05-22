@@ -54,17 +54,30 @@
 
 ## 🛠️ 快速开始
 
-### 1. 从源码编译安装
+### 1. 一键全自动安装 (macOS & Linux)
+
+使用以下全自动脚本，即刻完成系统平台与 CPU 架构的检测、最新版本下载及自动安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Planckbaka/iroha-cli/main/install.sh | sh
+```
+
+### 2. 通过 Homebrew 安装
+
+或者，将我们的 tap 添加到 Homebrew 并一键完成部署：
+
+```bash
+brew tap Planckbaka/iroha-cli
+brew install iroha
+```
+
+### 3. 从源码编译安装
 
 确保您的本地环境已安装 Go `1.26` 或更高版本：
 
 ```bash
 go install github.com/Planckbaka/iroha-cli/cmd/agent-cli@latest
 ```
-
-### 2. 下载编译好的二进制文件
-
-或者，您可以直接访问 [Releases 页面](https://github.com/Planckbaka/iroha-cli/releases) 下载适用于 macOS、Linux 或 Windows 平台的已编译可执行文件。
 
 ### 3. 交互式配置向导
 

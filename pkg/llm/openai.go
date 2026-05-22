@@ -114,27 +114,22 @@ type chatStreamResponse struct {
 }
 
 func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	// If API Key is empty or simulate, return error — use SimulatedAdapter for offline mode
-	if g.apiKey == "" || g.apiKey == "simulate" {
+	if g.apiKey == "" {
 		return func(yield func(*model.LLMResponse, error) bool) {
-			yield(nil, fmt.Errorf("OpenAI-compatible adapter requires an API key; use provider=simulate for offline mode"))
+			yield(nil, fmt.Errorf("OpenAI-compatible adapter requires an API key"))
 		}
 	}
 
 	return func(yield func(*model.LLMResponse, error) bool) {
-		// Note round without update to keep track of turns
 		if g.hooks != nil {
 			g.hooks.NoteRound()
 		}
 
-		// Use request contents directly (compaction now handled by runner)
 		compactedContents := req.Contents
 
-		// Inject Nag Reminder if triggered (s03)
 		if g.hooks != nil {
 			nagMsg := g.hooks.NagReminder()
 			if nagMsg != "" {
-				// Inject as prefix to the latest user message
 				for i := len(compactedContents) - 1; i >= 0; i-- {
 					c := compactedContents[i]
 					if c.Role == "user" {
@@ -147,7 +142,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			}
 		}
 
-		// Build dynamic system prompt
 		var systemPrompt string
 		if g.systemPrompt != "" {
 			systemPrompt = g.systemPrompt
@@ -161,7 +155,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			systemPrompt = strings.Join(parts, "\n")
 		}
 
-		// 1. Convert compactedContents to Zhipu GLM message list
+		// 1. Convert compactedContents to message list
 		var messages []chatMessage
 		if systemPrompt != "" {
 			messages = append(messages, chatMessage{
@@ -177,7 +171,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 			var textParts []string
 			var toolCalls []chatToolCall
-			var toolCallID string
 
 			for _, part := range c.Parts {
 				if part.Text != "" {
@@ -194,31 +187,31 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 						},
 					})
 				}
-				// Handle FunctionResponse (Tool Output) back to GLM message
+			}
+
+			if len(textParts) > 0 || len(toolCalls) > 0 || (role != "tool") {
+				var content any = strings.Join(textParts, "\n")
+				messages = append(messages, chatMessage{
+					Role:    role,
+					Content: content,
+					Tools:   toolCalls,
+				})
+			}
+
+			// US-003: Each FunctionResponse emits a separate message
+			for _, part := range c.Parts {
 				if part.FunctionResponse != nil {
-					role = "tool"
 					respBytes, _ := json.Marshal(part.FunctionResponse.Response)
-					textParts = append(textParts, string(respBytes))
-					toolCallID = "call_" + part.FunctionResponse.Name
+					messages = append(messages, chatMessage{
+						Role:       "tool",
+						Content:    string(respBytes),
+						ToolCallID: "call_" + part.FunctionResponse.Name,
+					})
 				}
 			}
-
-			var content any
-			if role == "tool" {
-				content = strings.Join(textParts, "\n")
-			} else {
-				content = strings.Join(textParts, "\n")
-			}
-
-			messages = append(messages, chatMessage{
-				Role:       role,
-				Content:    content,
-				Tools:      toolCalls,
-				ToolCallID: toolCallID,
-			})
 		}
 
-		// 2. Map ADK Tools to GLM Tools Schema
+		// 2. Map ADK Tools to schema
 		var tools []chatToolSchema
 		if req.Config != nil && req.Config.Tools != nil && len(req.Config.Tools) > 0 {
 			for _, t := range req.Config.Tools {
@@ -243,7 +236,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			}
 		}
 
-		// 3. Construct Zhipu GLM Request
+		// 3. Construct request
 		glmReq := chatRequest{
 			Model:    g.modelName,
 			Messages: messages,
@@ -251,7 +244,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			Stream:   true,
 		}
 
-		// DEBUG: log tools sent to API
 		toolNames := make([]string, 0, len(tools))
 		for _, t := range tools {
 			toolNames = append(toolNames, t.Function.Name)
@@ -265,9 +257,8 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			}
 			return
 		}
-		DumpDebugFile("req.json", reqBytes)
 
-		// 4. Send HTTP request to dynamic endpoint
+		// 4. Send HTTP request with retry
 		apiURL := g.baseURL
 		if apiURL == "" {
 			if !yield(nil, fmt.Errorf("OpenAI-compatible adapter requires a base URL; set --base-url or provider config")) {
@@ -285,9 +276,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			if attempt > 0 {
-				// Calculate exponential backoff: 1s, 2s, 4s, ...
 				delaySec := 1.0 * math.Pow(2.0, float64(attempt-1))
-				// Add +/- 20% randomized jitter
 				jitter := (rand.Float64() * 0.4) - 0.2
 				delaySec = delaySec + (delaySec * jitter)
 				if delaySec > 10.0 {
@@ -297,7 +286,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 					delaySec = 1.0
 				}
 
-				// Stream warning to TUI
 				warnMsg := fmt.Sprintf("\n⚠️  [网络异常] 正在尝试第 %d/%d 次自动重试，等待约 %.1f 秒...\n", attempt, maxRetries, delaySec)
 				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
@@ -312,7 +300,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 					return
 				}
 
-				// Sleep with context support
 				select {
 				case <-ctx.Done():
 					if !yield(nil, ctx.Err()) {
@@ -352,7 +339,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				if isTransient {
 					continue
 				} else {
-					// Non-transient error, fail immediately
 					if !yield(nil, lastErr) {
 						return
 					}
@@ -360,7 +346,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				}
 			}
 
-			// Success
 			lastErr = nil
 			break
 		}
@@ -375,11 +360,15 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 		defer func() { _ = resp.Body.Close() }()
 
 		// 5. Parse Server-Sent Events (SSE) stream
-		reader := bufio.NewReader(resp.Body)
-		var currentToolName string
-		var currentToolArgs strings.Builder
+		// US-008: Track multiple tool calls by index
+		type toolAccumulator struct {
+			name string
+			args strings.Builder
+		}
+		pendingTools := make(map[int]*toolAccumulator)
 		var sentFinal bool
 
+		reader := bufio.NewReader(resp.Body)
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
@@ -407,7 +396,6 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				continue
 			}
 
-			// 提取 token 用量（如果 API 在 SSE chunk 中返回了 usage）
 			if chunk.Usage.TotalTokens > 0 {
 				g.AddTokens(chunk.Usage.TotalTokens)
 			}
@@ -419,57 +407,64 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			choice := chunk.Choices[0]
 			delta := choice.Delta
 
-			// DEBUG: log finish_reason and tool_calls in SSE
 			if choice.FinishReason != "" || len(delta.ToolCalls) > 0 {
-				DebugLog("[SSE] finish=%s toolCalls=%d toolName=%s contentLen=%d", choice.FinishReason, len(delta.ToolCalls), currentToolName, len(delta.Content))
+				DebugLog("[SSE] finish=%s toolCalls=%d contentLen=%d pendingTools=%d", choice.FinishReason, len(delta.ToolCalls), len(delta.Content), len(pendingTools))
 			}
 
-			// 1. Handle streaming Tool Call arguments accumulation
-			if len(delta.ToolCalls) > 0 {
-				tc := delta.ToolCalls[0]
+			// 1. Accumulate tool call deltas by index
+			for _, tc := range delta.ToolCalls {
+				idx := tc.Index
+				acc, ok := pendingTools[idx]
+				if !ok {
+					acc = &toolAccumulator{}
+					pendingTools[idx] = acc
+				}
 				if tc.Function.Name != "" {
-					currentToolName = tc.Function.Name
+					acc.name = tc.Function.Name
 				}
 				if tc.Function.Arguments != "" {
-					currentToolArgs.WriteString(tc.Function.Arguments)
+					acc.args.WriteString(tc.Function.Arguments)
 				}
 			}
 
-			// 2. If we are currently accumulating a tool call and see any finish reason, yield it immediately
-			if currentToolName != "" && choice.FinishReason != "" {
-				var parsedArgs map[string]any
-				_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
+			// 2. On finish_reason, yield all accumulated tool calls with TurnComplete: false
+			if choice.FinishReason != "" && len(pendingTools) > 0 {
+				for i := 0; i < len(pendingTools); i++ {
+					acc, ok := pendingTools[i]
+					if !ok || acc.name == "" {
+						continue
+					}
+					var parsedArgs map[string]any
+					_ = json.Unmarshal([]byte(acc.args.String()), &parsedArgs)
+					DebugLog("[TOOL-CALL] Yielding FunctionCall: name=%s args=%v finish=%s", acc.name, parsedArgs, choice.FinishReason)
 
-				if !yield(&model.LLMResponse{
-					Content: &genai.Content{
-						Role: "model",
-						Parts: []*genai.Part{
-							{
-								FunctionCall: &genai.FunctionCall{
-									Name: currentToolName,
-									Args: parsedArgs,
+					if !yield(&model.LLMResponse{
+						Content: &genai.Content{
+							Role: "model",
+							Parts: []*genai.Part{
+								{
+									FunctionCall: &genai.FunctionCall{
+										Name: acc.name,
+										Args: parsedArgs,
+									},
 								},
 							},
 						},
-					},
-					Partial:      false,
-					TurnComplete: true, // Directly mark final!
-				}, nil) {
-					return
+						Partial:      false,
+						TurnComplete: false,
+					}, nil) {
+						return
+					}
 				}
-
-				currentToolName = ""
-				currentToolArgs.Reset()
-				sentFinal = true // Mark final sent, prevent subsequent empty text injection!
-				continue
+				pendingTools = make(map[int]*toolAccumulator)
 			}
 
-			// 3. Skip regular text processing if this chunk was just tool call delta accumulation
+			// 3. Skip text processing for tool-only chunks
 			if len(delta.ToolCalls) > 0 {
 				continue
 			}
 
-			// Handle streaming regular text content
+			// 4. Stream text content
 			if delta.Content != "" {
 				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
@@ -485,7 +480,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				}
 			}
 
-			// Any non-empty finish reason signals the model is done
+			// 5. Finish reason with no pending tools → TurnComplete: true
 			if choice.FinishReason != "" {
 				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
@@ -504,10 +499,14 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 			}
 		}
 
-		// Flush any remaining accumulated tool call if the stream ended prematurely
-		if currentToolName != "" {
+		// Flush any remaining tool calls if stream ended prematurely
+		for i := 0; i < len(pendingTools); i++ {
+			acc, ok := pendingTools[i]
+			if !ok || acc.name == "" {
+				continue
+			}
 			var parsedArgs map[string]any
-			_ = json.Unmarshal([]byte(currentToolArgs.String()), &parsedArgs)
+			_ = json.Unmarshal([]byte(acc.args.String()), &parsedArgs)
 
 			if !yield(&model.LLMResponse{
 				Content: &genai.Content{
@@ -515,23 +514,20 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 					Parts: []*genai.Part{
 						{
 							FunctionCall: &genai.FunctionCall{
-								Name: currentToolName,
+								Name: acc.name,
 								Args: parsedArgs,
 							},
 						},
 					},
 				},
 				Partial:      false,
-				TurnComplete: true, // Mark final on flush!
+				TurnComplete: false,
 			}, nil) {
 				return
 			}
-			sentFinal = true
 		}
 
-		// Guarantee a final response is always sent — prevents ADK
-		// "TODO: last event is not final" error when the stream ends
-		// without a proper finish_reason (e.g. network timeout, "length").
+		// Guarantee a final response
 		if !sentFinal {
 			if !yield(&model.LLMResponse{
 				Content: &genai.Content{

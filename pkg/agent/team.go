@@ -136,8 +136,14 @@ func (tm *TeamManager) RegisterTeammate(name, role, systemPrompt string) (*Teamm
 	t.LastActive = time.Now()
 
 	if err := tm.SaveConfig(); err != nil {
+		LogError(CatSubagent, "subagent_register_failed", fmt.Sprintf("Failed to save team config during teammate '%s' registration", name), err, map[string]any{"name": name})
 		return nil, err
 	}
+
+	LogInfo(CatSubagent, "subagent_registered", fmt.Sprintf("Specialist teammate '%s' registered (Role: %s)", name, role), map[string]any{
+		"name": name,
+		"role": role,
+	})
 
 	return t, nil
 }
@@ -180,18 +186,28 @@ func (tm *TeamManager) AppendToInbox(name string, msg TeamMessage) error {
 	inboxPath := filepath.Join(tm.teamDir, "inbox", name+".jsonl")
 	f, err := os.OpenFile(inboxPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		LogError(CatSubagent, "subagent_inbox_open_failed", fmt.Sprintf("Failed to open inbox file for teammate '%s'", name), err, map[string]any{"name": name, "path": inboxPath})
 		return fmt.Errorf("failed to open inbox for %s: %w", name, err)
 	}
 	defer func() { _ = f.Close() }()
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal inbox message: %w", err)
+		LogError(CatSubagent, "subagent_marshal_failed", fmt.Sprintf("Failed to marshal message for teammate '%s'", name), err, map[string]any{"name": name})
+		return fmt.Errorf("failed to marshal inbox message for %s: %w", name, err)
 	}
 
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("failed to write inbox message: %w", err)
+		LogError(CatSubagent, "subagent_inbox_write_failed", fmt.Sprintf("Failed to write to inbox file for teammate '%s'", name), err, map[string]any{"name": name, "path": inboxPath})
+		return fmt.Errorf("failed to write inbox message for %s: %w", name, err)
 	}
+
+	LogInfo(CatSubagent, "subagent_message_sent", fmt.Sprintf("Message sent to teammate '%s' from '%s'", name, msg.Sender), map[string]any{
+		"sender":    msg.Sender,
+		"recipient": name,
+		"content":   msg.Content,
+	})
+
 	return nil
 }
 
@@ -262,6 +278,10 @@ func (tm *TeamManager) StartTeammateLoop(name string) error {
 	stopChan := make(chan struct{})
 	tm.activeLoops[name] = stopChan
 
+	LogInfo(CatSubagent, "subagent_loop_started", fmt.Sprintf("Background message processing loop started for teammate '%s'", name), map[string]any{
+		"name": name,
+	})
+
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -289,6 +309,7 @@ func (tm *TeamManager) StartTeammateLoop(name string) error {
 				tm.mu.Unlock()
 
 				for _, msg := range messages {
+					startTime := time.Now()
 					var response string
 					var procErr error
 					if tm.ProcessMessage != nil {
@@ -296,6 +317,23 @@ func (tm *TeamManager) StartTeammateLoop(name string) error {
 					} else {
 						// Fallback: simple echo or log if not overridden
 						response = fmt.Sprintf("Teammate '%s' received: %s", t.Name, msg.Content)
+					}
+					durationMS := time.Since(startTime).Milliseconds()
+
+					if procErr != nil {
+						LogError(CatSubagent, "subagent_message_failed", fmt.Sprintf("Teammate '%s' failed to process message from '%s'", t.Name, msg.Sender), procErr, map[string]any{
+							"sender":      msg.Sender,
+							"recipient":   t.Name,
+							"content":     msg.Content,
+							"duration_ms": durationMS,
+						})
+					} else {
+						GlobalLogger.Log(LevelInfo, CatSubagent, "subagent_message_processed", fmt.Sprintf("Teammate '%s' successfully processed message from '%s' in %dms", t.Name, msg.Sender, durationMS), durationMS, map[string]any{
+							"sender":      msg.Sender,
+							"recipient":   t.Name,
+							"duration_ms": durationMS,
+							"response":    response,
+						})
 					}
 
 					if procErr == nil && response != "" {
@@ -336,11 +374,20 @@ func (tm *TeamManager) StopTeammateLoop(name string) {
 			t.LastActive = time.Now()
 			_ = tm.SaveConfig()
 		}
+
+		LogInfo(CatSubagent, "subagent_loop_stopped", fmt.Sprintf("Background loop stopped for teammate '%s'", name), map[string]any{
+			"name": name,
+		})
 	}
 }
 
 // Broadcast sends a message to all registered teammates.
 func (tm *TeamManager) Broadcast(sender, content string) error {
+	LogInfo(CatSubagent, "subagent_broadcast", fmt.Sprintf("Broadcast message sent by '%s'", sender), map[string]any{
+		"sender":  sender,
+		"content": content,
+	})
+
 	teammates, err := tm.ListTeammates()
 	if err != nil {
 		return err

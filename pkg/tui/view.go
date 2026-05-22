@@ -118,8 +118,20 @@ func RenderSlashMenu(items []SlashMenuItem, selectedIndex int, width int) string
 		maxItems = len(items)
 	}
 
+	// Calculate scroll offset so selected item is always visible
+	startIdx := 0
+	if selectedIndex >= maxItems {
+		startIdx = selectedIndex - maxItems + 1
+	}
+	if startIdx+maxItems > len(items) {
+		startIdx = len(items) - maxItems
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
 	var sb strings.Builder
-	for i := 0; i < maxItems; i++ {
+	for i := startIdx; i < startIdx+maxItems; i++ {
 		item := items[i]
 		cmdStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Width(18)
 		descStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)

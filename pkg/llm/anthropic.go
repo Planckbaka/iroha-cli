@@ -14,7 +14,16 @@ import (
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
+	"sync/atomic"
 )
+
+
+var anthropicToolIDCounter uint64
+
+func nextAnthropicToolID() string {
+	n := atomic.AddUint64(&anthropicToolIDCounter, 1)
+	return fmt.Sprintf("toolu_%04d", n)
+}
 
 // AnthropicAdapter implements model.LLM for the Anthropic Messages API.
 type AnthropicAdapter struct {
@@ -188,6 +197,12 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 			}
 		}
 
+
+						toolNames := make([]string, 0, len(tools))
+			for _, t := range tools {
+				toolNames = append(toolNames, t.Name)
+			}
+			DebugLog("[Anthropic] Sending %d tools: %v | Model: %s", len(tools), toolNames, a.modelName)
 		// Build request
 		anthropicReq := anthropicRequest{
 			Model:     a.modelName,
@@ -372,6 +387,7 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 					var parsedArgs map[string]any
 					fullInput := strings.Join(toolInputParts, "")
 					_ = json.Unmarshal([]byte(fullInput), &parsedArgs)
+						DebugLog("[Anthropic TOOL-CALL] Yielding FunctionCall: name=%s args=%v", currentToolName, parsedArgs)
 
 					if !yield(&model.LLMResponse{
 						Content: &genai.Content{
@@ -386,14 +402,13 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 							},
 						},
 						Partial:      false,
-						TurnComplete: true, // Directly mark final!
+						TurnComplete: false,
 					}, nil) {
 						return
 					}
 
 					currentToolName = ""
 					toolInputParts = nil
-					sentFinal = true // Mark final sent, prevent subsequent empty text injection!
 				}
 
 			case "message_delta":
@@ -456,6 +471,7 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 // convertToAnthropicMessages converts genai.Content slices to Anthropic message format.
 func convertToAnthropicMessages(contents []*genai.Content) ([]anthropicMessage, error) {
 	var messages []anthropicMessage
+	toolIDMap := make(map[string]string)
 
 	for _, c := range contents {
 		role := c.Role
@@ -475,20 +491,26 @@ func convertToAnthropicMessages(contents []*genai.Content) ([]anthropicMessage, 
 
 			if p.FunctionCall != nil {
 				argsJSON, _ := json.Marshal(p.FunctionCall.Args)
+				toolID := nextAnthropicToolID()
+				toolIDMap[p.FunctionCall.Name] = toolID
 				blocks = append(blocks, anthropicContentBlock{
 					Type:  "tool_use",
-					ID:    "toolu_" + p.FunctionCall.Name,
+					ID:    toolID,
 					Name:  p.FunctionCall.Name,
 					Input: argsJSON,
 				})
 			}
 
 			if p.FunctionResponse != nil {
-				role = "user" // tool_result messages go in user role
+				role = "user"
 				respJSON, _ := json.Marshal(p.FunctionResponse.Response)
+				mappedID := toolIDMap[p.FunctionResponse.Name]
+				if mappedID == "" {
+					mappedID = "toolu_" + p.FunctionResponse.Name
+				}
 				blocks = append(blocks, anthropicContentBlock{
 					Type:      "tool_result",
-					ToolUseID: "toolu_" + p.FunctionResponse.Name,
+					ToolUseID: mappedID,
 					Content_:  respJSON,
 				})
 			}

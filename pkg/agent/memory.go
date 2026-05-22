@@ -152,6 +152,9 @@ func (mm *MemoryManager) load() {
 func (mm *MemoryManager) loadDir(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			LogError(CatSession, "memory_load_dir_failed", fmt.Sprintf("Failed to read memory directory: %s", dir), err, map[string]any{"path": dir})
+		}
 		return // directory absent — silently skip
 	}
 	loaded := 0
@@ -159,12 +162,15 @@ func (mm *MemoryManager) loadDir(dir string) {
 		if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") || de.Name() == "MEMORY.md" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, de.Name()))
+		filePath := filepath.Join(dir, de.Name())
+		data, err := os.ReadFile(filePath)
 		if err != nil {
+			LogError(CatSession, "memory_file_read_failed", fmt.Sprintf("Failed to read memory file: %s", filePath), err, map[string]any{"path": filePath})
 			continue
 		}
 		entry, err := parseFrontmatter(string(data))
 		if err != nil || entry == nil {
+			LogError(CatSession, "memory_parse_failed", fmt.Sprintf("Failed to parse frontmatter from memory: %s", filePath), err, map[string]any{"path": filePath})
 			continue
 		}
 		entry.File = de.Name()
@@ -173,6 +179,10 @@ func (mm *MemoryManager) loadDir(dir string) {
 	}
 	if loaded > 0 {
 		mm.dirs = append(mm.dirs, dir)
+		LogInfo(CatSession, "memory_load_success", fmt.Sprintf("Loaded %d memories from directory: %s", loaded, dir), map[string]any{
+			"directory":    dir,
+			"loaded_count": loaded,
+		})
 	}
 }
 
@@ -180,19 +190,27 @@ func (mm *MemoryManager) loadDir(dir string) {
 // If an entry with the same name already exists it is overwritten.
 func (mm *MemoryManager) Save(name, description string, memType MemoryType, content string) error {
 	if !validMemoryTypes[memType] {
-		return fmt.Errorf("invalid memory type %q: must be one of user, feedback, project, reference", memType)
+		err := fmt.Errorf("invalid memory type %q: must be one of user, feedback, project, reference", memType)
+		LogError(CatSession, "memory_save_invalid_type", "Attempted to save memory with invalid type", err, map[string]any{"type": memType, "name": name})
+		return err
 	}
 	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("memory name cannot be empty")
+		err := fmt.Errorf("memory name cannot be empty")
+		LogError(CatSession, "memory_save_empty_name", "Attempted to save memory with empty name", err, nil)
+		return err
 	}
 
 	// Determine save directory: prefer project-level
 	saveDir, err := projectMemoryDir()
 	if err != nil {
-		return fmt.Errorf("cannot determine memory directory: %w", err)
+		errWrap := fmt.Errorf("cannot determine memory directory: %w", err)
+		LogError(CatSession, "memory_save_dir_failed", "Failed to resolve project memory directory", errWrap, nil)
+		return errWrap
 	}
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		return fmt.Errorf("cannot create memory directory: %w", err)
+		errWrap := fmt.Errorf("cannot create memory directory: %w", err)
+		LogError(CatSession, "memory_create_dir_failed", fmt.Sprintf("Failed to create memory directory: %s", saveDir), errWrap, map[string]any{"path": saveDir})
+		return errWrap
 	}
 
 	filename := slugify(name) + ".md"
@@ -207,9 +225,12 @@ func (mm *MemoryManager) Save(name, description string, memType MemoryType, cont
 		File:        filename,
 	}
 
+	filePath := filepath.Join(saveDir, filename)
 	text := renderFrontmatter(entry)
-	if err := os.WriteFile(filepath.Join(saveDir, filename), []byte(text), 0644); err != nil {
-		return fmt.Errorf("cannot write memory file: %w", err)
+	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+		errWrap := fmt.Errorf("cannot write memory file: %w", err)
+		LogError(CatSession, "memory_write_failed", fmt.Sprintf("Failed to write memory file: %s", filePath), errWrap, map[string]any{"path": filePath, "name": name})
+		return errWrap
 	}
 
 	mm.mu.Lock()
@@ -220,6 +241,14 @@ func (mm *MemoryManager) Save(name, description string, memType MemoryType, cont
 	mm.mu.Unlock()
 
 	mm.rebuildIndex(saveDir)
+
+	LogAudit(CatSession, "memory_save", fmt.Sprintf("Memory entry '%s' (%s) saved successfully", name, memType), map[string]any{
+		"name":        name,
+		"type":        memType,
+		"description": description,
+		"path":        filePath,
+	})
+
 	return nil
 }
 

@@ -13,7 +13,7 @@ func TestPromptBuilderBasic(t *testing.T) {
 	prompt := builder.Build()
 
 	// 1. Check core persona
-	if !strings.Contains(prompt, "你是一个专业的软件工程助手，名叫 Iroha") {
+	if !strings.Contains(prompt, "You are Iroha, a professional software engineering assistant") {
 		t.Errorf("expected prompt to contain core persona, got: %s", prompt)
 	}
 

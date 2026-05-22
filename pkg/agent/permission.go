@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -84,8 +83,7 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			{Tool: "task_update", Behavior: "allow"},
 			{Tool: "task_list", Behavior: "allow"},
 			{Tool: "task_get", Behavior: "allow"},
-			{Tool: "background_run", Behavior: "allow"},
-			{Tool: "check_background", Behavior: "allow"},
+				{Tool: "check_background", Behavior: "allow"},
 			{Tool: "schedule_create", Behavior: "allow"},
 			{Tool: "schedule_list", Behavior: "allow"},
 			{Tool: "schedule_delete", Behavior: "allow"},
@@ -111,7 +109,7 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			{Tool: "worktree_closeout", Behavior: "allow"},
 			// s19: MCP & Plugin
 			{Tool: "mcp_server_list", Behavior: "allow"},
-			{Tool: "mcp__*", Behavior: "allow"},
+			{Tool: "mcp__*", Behavior: "ask"},
 		},
 	}
 }
@@ -226,7 +224,6 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 
 	// Step 2: Mode-based decisions
 	isWrite := (toolName == "file_write" || toolName == "shell_run" || toolName == "background_run" || strings.HasPrefix(toolName, "mcp__"))
-	isRead := (toolName == "file_read" || toolName == "search_grep" || toolName == "todo")
 
 	if pm.mode == ModePlan && isWrite {
 		pm.consecutiveDenials++
@@ -238,9 +235,9 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 		return "deny", reason
 	}
 
-	if pm.mode == ModeAuto && isRead {
+	if pm.mode == ModeAuto && !isWrite {
 		pm.consecutiveDenials = 0
-		reason := "Auto mode: read operations auto-approved"
+		reason := "Auto mode: non-write operations auto-approved"
 		LogAudit(CatSecurity, "mode_auto_allow", reason, map[string]any{
 			"tool": toolName,
 			"args": args,
@@ -347,9 +344,10 @@ func matchesPattern(pattern, val string) bool {
 	if pattern == "*" || pattern == "" {
 		return true
 	}
-	matched, err := filepath.Match(pattern, val)
-	if err == nil && matched {
-		return true
+	// Use HasPrefix for wildcard suffix patterns (e.g. "mcp__*")
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(val, prefix)
 	}
 	return strings.Contains(strings.ToLower(val), strings.ToLower(pattern))
 }

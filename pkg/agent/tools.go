@@ -350,9 +350,8 @@ func GetSWETools() ([]tool.Tool, error) {
 	}
 
 	writeTool, err := functiontool.New(functiontool.Config{
-		Name:                "file_write",
-		Description:         "向文件写入指定内容。这会覆盖原文件（如果有的话）。",
-		RequireConfirmation: true, // 静态标记，在执行 Run 前强制人机确认
+		Name:        "file_write",
+		Description: "向文件写入指定内容。这会覆盖原文件（如果有的话）。",
 	}, FileWriteHandler)
 	if err != nil {
 		return nil, err
@@ -375,9 +374,8 @@ func GetSWETools() ([]tool.Tool, error) {
 	}
 
 	shellTool, err := functiontool.New(functiontool.Config{
-		Name:                "shell_run",
-		Description:         "执行一条 Shell 命令。只允许在当前工作区目录下执行。",
-		RequireConfirmation: true, // 静态标记，在执行 Run 前极其需要人机确认
+		Name:        "shell_run",
+		Description: "执行一条 Shell 命令。只允许在当前工作区目录下执行。",
 	}, ShellRunHandler)
 	if err != nil {
 		return nil, err

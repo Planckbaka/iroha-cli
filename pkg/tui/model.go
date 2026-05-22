@@ -31,6 +31,36 @@ const (
 	stateSessionSelect
 )
 
+func (s TuiState) String() string {
+	switch s {
+	case statePrompt:
+		return "Prompt"
+	case stateThinking:
+		return "Thinking"
+	case stateStreaming:
+		return "Streaming"
+	case stateConfirming:
+		return "Confirming"
+	case statePermissionSelect:
+		return "PermissionSelect"
+	case stateSessionSelect:
+		return "SessionSelect"
+	default:
+		return "Unknown"
+	}
+}
+
+func (m Model) transitionTo(newState TuiState) Model {
+	oldState := m.State
+	m.State = newState
+	agent.LogInfo(agent.CatTUI, "state_transition", fmt.Sprintf("TUI transitioned from %s to %s", oldState.String(), newState.String()), map[string]any{
+		"session_id": m.SessionID,
+		"old_state":  oldState.String(),
+		"new_state":  newState.String(),
+	})
+	return m
+}
+
 // Custom Message Types for Concurrency
 type StreamTextMsg struct {
 	Text string
@@ -254,6 +284,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Log structural or action keypresses to avoid overloading the log
+		isStructural := false
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEnter, tea.KeyEscape, tea.KeyTab, tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight:
+			isStructural = true
+		}
+		if m.State == stateConfirming && (msg.String() == "y" || msg.String() == "n" || msg.String() == "a") {
+			isStructural = true
+		}
+		if isStructural {
+			agent.LogInfo(agent.CatTUI, "key_press", fmt.Sprintf("User pressed structural key: %s (State: %s)", msg.String(), m.State.String()), map[string]any{
+				"key":        msg.String(),
+				"state":      m.State.String(),
+				"session_id": m.SessionID,
+			})
+		}
+
 		// Handle permission select state FIRST
 		if m.State == statePermissionSelect {
 			permModes := []agent.PermissionMode{agent.ModePlan, agent.ModeDefault, agent.ModeAuto}
@@ -272,10 +319,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = agent.GlobalPermissionManager.SetMode(permModes[m.PermSelectIndex])
 				if m.StartInSessionPicker {
 					m.PrevState = statePrompt
-					m.State = stateSessionSelect
+					m = m.transitionTo(stateSessionSelect)
 					m.loadSessionsList()
 				} else {
-					m.State = statePrompt
+					m = m.transitionTo(statePrompt)
 				}
 				m.Viewport.SetContent(m.renderViewportContent())
 				return m, nil
@@ -299,7 +346,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case tea.KeyEscape:
-				m.State = m.PrevState
+				m = m.transitionTo(m.PrevState)
 				m.Viewport.SetContent(m.renderViewportContent())
 				return m, nil
 			case tea.KeyEnter:
@@ -315,7 +362,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.SessionID = sel.ID
 					m.LoadHistoryFromSession(sel.ID)
 				}
-				m.State = statePrompt
+				m = m.transitionTo(statePrompt)
 				m.Viewport.SetContent(m.renderViewportContent())
 				m.Viewport.GotoBottom()
 				return m, nil
@@ -350,7 +397,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Viewport.GotoBottom()
 				return m, nil
 			case tea.KeyEnter:
-				m.State = stateThinking
+				m = m.transitionTo(stateThinking)
 				var resp string
 				switch m.ConfirmSelectIndex {
 				case 0:
@@ -366,15 +413,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			switch keyStr {
 			case "y":
-				m.State = stateThinking
+				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "y"
 				return m, m.listenToConfirmationBridge()
 			case "n", "esc":
-				m.State = stateThinking
+				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "n"
 				return m, m.listenToConfirmationBridge()
 			case "a":
-				m.State = stateThinking
+				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "always"
 				return m, m.listenToConfirmationBridge()
 			case "shift+tab":
@@ -755,7 +802,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.TextArea.SetValue("")
 						m.TextArea.SetHeight(2)
 						m.PrevState = m.State
-						m.State = stateSessionSelect
+						m = m.transitionTo(stateSessionSelect)
 						m.loadSessionsList()
 						m.Viewport.SetContent(m.renderViewportContent())
 						return m, nil
@@ -769,7 +816,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if len(parts) < 2 {
 							m.History = append(m.History, userLog, RenderPermissionSelect(agent.GlobalPermissionManager.GetMode()))
 							// Switch to inline permission selection state
-							m.State = statePermissionSelect
+							m = m.transitionTo(statePermissionSelect)
 							m.PermSelectIndex = 1 // default
 							return m, nil
 						}
@@ -803,7 +850,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Prepare for the turn
 				m.CurrentPrompt = inputVal
 				m.StreamedText = ""
-				m.State = stateThinking
+				m = m.transitionTo(stateThinking)
 				m.TextArea.SetValue("")
 				m.TextArea.SetHeight(2)
 
@@ -831,7 +878,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Dynamic Background Runner Stream messages
 	case StreamTextMsg:
-		m.State = stateStreaming
+		m = m.transitionTo(stateStreaming)
 		m.StreamedText += msg.Text
 
 		// 解析 [status:xxx] 标签（取最后一个匹配）
@@ -887,7 +934,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenToToolBridge()
 
 	case ConfirmationRequiredMsg:
-		m.State = stateConfirming
+		m = m.transitionTo(stateConfirming)
 		m.ConfirmationPrompt = msg.Prompt
 		m.ConfirmSelectIndex = 0
 		m.Viewport.SetContent(m.renderViewportContent())
@@ -954,7 +1001,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) finalizeTurn() {
-	m.State = statePrompt
+	*m = m.transitionTo(statePrompt)
 	if !m.RoundStartTime.IsZero() {
 		m.LastRoundDuration = time.Since(m.RoundStartTime)
 		m.RoundStartTime = time.Time{}

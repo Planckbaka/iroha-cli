@@ -54,17 +54,30 @@ Unlike traditional text-only CLI tools, Iroha features interactive human-in-the-
 
 ## 🛠️ Quick Start
 
-### 1. Install from Source
+### 1. One-Line Installer (macOS & Linux)
+
+Install `iroha` instantly in your path with our automated installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Planckbaka/iroha-cli/main/install.sh | sh
+```
+
+### 2. Install via Homebrew
+
+Or add our tap and install using Homebrew:
+
+```bash
+brew tap Planckbaka/iroha-cli
+brew install iroha
+```
+
+### 3. Install from Source
 
 Make sure you have Go `1.26` or higher installed:
 
 ```bash
 go install github.com/Planckbaka/iroha-cli/cmd/agent-cli@latest
 ```
-
-### 2. Download Pre-built Binary
-
-Or directly fetch the compiled executable for macOS, Linux, or Windows from the [Releases page](https://github.com/Planckbaka/iroha-cli/releases).
 
 ### 3. Interactive Configuration Wizard
 

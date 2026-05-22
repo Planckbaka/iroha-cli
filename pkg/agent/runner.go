@@ -48,12 +48,32 @@ type ConfirmationBridge struct {
 	PromptChan   chan string // Agent sends confirmation prompts here
 	ResponseChan chan string // TUI sends user responses (y/n/always) here
 	CancelChan   chan struct{}
+	cancelMu     sync.Mutex
 }
 
 var Bridge = &ConfirmationBridge{
 	PromptChan:   make(chan string, 1),
 	ResponseChan: make(chan string, 1),
 	CancelChan:   make(chan struct{}),
+}
+
+func (b *ConfirmationBridge) ResetCancel() {
+	b.cancelMu.Lock()
+	b.CancelChan = make(chan struct{})
+	b.cancelMu.Unlock()
+}
+
+func (b *ConfirmationBridge) CancelChanRead() <-chan struct{} {
+	b.cancelMu.Lock()
+	ch := b.CancelChan
+	b.cancelMu.Unlock()
+	return ch
+}
+
+func (b *ConfirmationBridge) Cancel() {
+	b.cancelMu.Lock()
+	close(b.CancelChan)
+	b.cancelMu.Unlock()
 }
 
 // GlobalSessionService is the persistent session store wrapper singleton.
@@ -115,7 +135,7 @@ type CustomRunner struct {
 	llmModel  model.LLM
 }
 
-func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string) (*CustomRunner, error) {
+func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
 	// 1. Initialize Google Genkit Go SDK Registry & Plugins based on active provider
 	// Only initialize Genkit for providers that use the Genkit adapter (Gemini, Claude).
 	// OpenAI-compatible providers use the direct adapter and don't need Genkit.
@@ -135,7 +155,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	// 2. Create our abstract model adapter
 	systemPrompt := buildSystemPrompt()
-	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, runnerHooks{})
+	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
 	if err != nil {
 		return nil, fmt.Errorf("创建模型适配器失败: %w", err)
 	}
@@ -246,10 +266,10 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 	})
 
 	// Reset the cancel channel for this execution turn
-	Bridge.CancelChan = make(chan struct{})
+	Bridge.ResetCancel()
 	go func() {
 		<-ctx.Done()
-		close(Bridge.CancelChan)
+		Bridge.Cancel()
 	}()
 
 	go func() {
@@ -352,15 +372,32 @@ type blockingConfirmationTool struct {
 
 // ProcessRequest implements toolinternal.RequestProcessor to forward setup/registration.
 func (b *blockingConfirmationTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) error {
+	// Let the underlying tool register its function declaration in req.Config.Tools
 	if rp, ok := b.Tool.(requestProcessor); ok {
-		return rp.ProcessRequest(ctx, req)
+		if err := rp.ProcessRequest(ctx, req); err != nil {
+			return err
+		}
 	}
+	// OVERWRITE the entry with our wrapper so the ADK dispatches tool calls
+	// through our Run() (which checks permissions) instead of the raw tool.
+	// Without this, PackTool stores the unwrapped *functionTool and the
+	// confirmation/permission layer is silently bypassed.
+	if req.Tools == nil {
+		req.Tools = make(map[string]any)
+	}
+	req.Tools[b.Name()] = b
 	return nil
 }
 
 func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	// Step 1: Check permissions with the GlobalPermissionManager
 	decision, reason := GlobalPermissionManager.Check(b.Name(), args)
+	LogAudit(CatToolCall, "permission_check", fmt.Sprintf("Tool %s: decision=%s reason=%s", b.Name(), decision, reason), map[string]any{
+		"tool":     b.Name(),
+		"decision": decision,
+		"reason":   reason,
+		"args":     args,
+	})
 
 	if decision == "deny" {
 		return nil, fmt.Errorf("操作被安全策略拒绝: %s", reason)
@@ -465,10 +502,15 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		promptMsg = fmt.Sprintf("\x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   原因: %s", b.Name(), args, reason)
 	}
 
-	// Send to TUI with cancellation support
+	llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())
+		// Send to TUI with cancellation support
+	LogAudit(CatToolCall, "confirmation_sent", fmt.Sprintf("Sending confirmation prompt to TUI for tool %s", b.Name()), map[string]any{
+		"tool":   b.Name(),
+		"prompt": promptMsg,
+	})
 	select {
 	case Bridge.PromptChan <- promptMsg:
-	case <-Bridge.CancelChan:
+	case <-Bridge.CancelChanRead():
 		return nil, fmt.Errorf("操作已被取消")
 	}
 
@@ -476,11 +518,12 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	var approved string
 	select {
 	case approved = <-Bridge.ResponseChan:
-	case <-Bridge.CancelChan:
+	case <-Bridge.CancelChanRead():
 		return nil, fmt.Errorf("操作已被取消")
 	}
 
-	if approved == "always" {
+	llm.DebugLog("[CONFIRM-TOOL] Executing tool after approval: tool=%s approved=%s", b.Name(), approved)
+		if approved == "always" {
 		// Dynamically add a temporary session allow rule
 		GlobalPermissionManager.AddRule(PermissionRule{
 			Tool:     b.Name(),

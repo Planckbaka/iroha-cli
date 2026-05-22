@@ -5,8 +5,6 @@ import (
 	"iter"
 	"testing"
 
-	"iroha/pkg/llm"
-
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -81,8 +79,8 @@ func TestReviewCommand_SimulateMode(t *testing.T) {
 }
 
 func TestSetAutoReviewConfig(t *testing.T) {
-	simAdapter := llm.NewSimulatedAdapter("test-model", "", nil)
-	SetAutoReviewConfig(simAdapter)
+	mock := &MockLLM{}
+	SetAutoReviewConfig(mock)
 
 	if GlobalAutoReviewConfig == nil {
 		t.Fatal("Expected GlobalAutoReviewConfig to be set")
@@ -90,8 +88,8 @@ func TestSetAutoReviewConfig(t *testing.T) {
 	if GlobalAutoReviewConfig.Model == nil {
 		t.Fatal("Expected Model to be set")
 	}
-	if GlobalAutoReviewConfig.Model.Name() != "test-model" {
-		t.Errorf("Expected model name test-model, got %s", GlobalAutoReviewConfig.Model.Name())
+	if GlobalAutoReviewConfig.Model.Name() != "mock-llm" {
+		t.Errorf("Expected model name mock-llm, got %s", GlobalAutoReviewConfig.Model.Name())
 	}
 }
 

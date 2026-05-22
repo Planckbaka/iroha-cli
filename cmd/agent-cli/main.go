@@ -17,10 +17,11 @@ import (
 
 func main() {
 	// 1. Parse command-line flags
-	providerFlag := flag.String("provider", "", "LLM 提供商: simulate, gemini, claude, openai, glm, deepseek, kimi, siliconflow")
+	providerFlag := flag.String("provider", "", "LLM 提供商: gemini, claude, openai, glm, deepseek, kimi, siliconflow")
 	modelFlag := flag.String("model", "", "模型名称 (如 gemini-2.5-flash, glm-4, gpt-4o)")
 	apiKeyFlag := flag.String("apikey", "", "LLM API Key")
 	baseURLFlag := flag.String("baseurl", "", "自定义 API Base URL (例如 https://api.openai.com/v1)")
+	apiFormatFlag := flag.String("api-format", "", "API 协议格式: openai (默认) 或 anthropic")
 	forceConfigFlag := flag.Bool("config", false, "强制启动交互式配置向导")
 	resumeFlag := flag.Bool("resume", false, "打开 TUI 交互式历史会话选择器")
 	lastFlag := flag.Bool("last", false, "自动恢复最近一次活跃的会话")
@@ -46,6 +47,7 @@ func main() {
 	var finalModel string
 	var finalAPIKey string
 	var finalBaseURL string
+	var finalAPIFormat string
 
 	// Provider resolution
 	if setFlags["provider"] {
@@ -53,7 +55,8 @@ func main() {
 	} else if cfg.Provider != "" {
 		finalProvider = cfg.Provider
 	} else {
-		finalProvider = "simulate"
+		// No provider configured — force config wizard
+		*forceConfigFlag = true
 	}
 
 	// Model resolution
@@ -89,9 +92,16 @@ func main() {
 		}
 	}
 
-	// 3. Trigger setup wizard if forced or if key is missing for online provider
-	if *forceConfigFlag || (finalProvider != "simulate" && finalAPIKey == "") {
-		if finalProvider != "simulate" && finalAPIKey == "" {
+	// APIFormat resolution
+	if setFlags["api-format"] {
+		finalAPIFormat = *apiFormatFlag
+	} else if cfg.APIFormat != "" {
+		finalAPIFormat = cfg.APIFormat
+	}
+
+	// 3. Trigger setup wizard if forced or if key is missing
+	if *forceConfigFlag || finalAPIKey == "" {
+		if finalAPIKey == "" {
 			fmt.Printf("\n\x1b[33m⚠️ 检测到提供商为 '%s' 但未提供 API Key。\x1b[0m\n", finalProvider)
 			fmt.Println("  将自动为您启动交互式配置向导...")
 		}
@@ -104,12 +114,19 @@ func main() {
 		finalModel = newCfg.Model
 		finalAPIKey = newCfg.APIKey
 		finalBaseURL = newCfg.BaseURL
+		finalAPIFormat = newCfg.APIFormat
 	}
 
-	fmt.Printf("\x1b[36mInitializing go-claude CLI Agent (Provider: %s, Model: %s)...\x1b[0m\n", finalProvider, finalModel)
+	// Resolve apiFormat enum
+	apiFormat := llm.APIFormatOpenAI
+	if finalAPIFormat == "anthropic" {
+		apiFormat = llm.APIFormatAnthropic
+	}
+
+	fmt.Printf("\x1b[36mInitializing go-claude CLI Agent (Provider: %s, Model: %s, API: %s)...\x1b[0m\n", finalProvider, finalModel, apiFormat)
 
 	// 4. Initialize the agent custom runner
-	runner, err := agent.NewCustomRunner(llm.ProviderType(finalProvider), finalModel, finalAPIKey, finalBaseURL)
+	runner, err := agent.NewCustomRunner(llm.ProviderType(finalProvider), finalModel, finalAPIKey, finalBaseURL, apiFormat)
 	if err != nil {
 		fmt.Printf("\x1b[31m[初始化失败] %v\x1b[0m\n", err)
 		os.Exit(1)

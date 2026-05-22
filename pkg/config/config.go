@@ -11,17 +11,18 @@ import (
 
 // ProviderDefaultConfig holds per-provider default values
 type ProviderDefaultConfig struct {
-	Model   string
-	BaseURL string
-	EnvKey  string
+	Model            string
+	BaseURL          string
+	AnthropicBaseURL string // Anthropic-compatible API endpoint (empty if not supported)
+	EnvKey           string
 }
 
 // ProviderDefaults maps provider names to their default configuration values
 var ProviderDefaults = map[string]ProviderDefaultConfig{
-	"glm":         {Model: "glm-4", BaseURL: "https://open.bigmodel.cn/api/paas/v4", EnvKey: "ZHIPU_API_KEY"},
+	"glm":         {Model: "glm-4", BaseURL: "https://open.bigmodel.cn/api/paas/v4", AnthropicBaseURL: "https://open.bigmodel.cn/api/anthropic", EnvKey: "ZHIPU_API_KEY"},
 	"openai":      {Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", EnvKey: "OPENAI_API_KEY"},
 	"claude":      {Model: "claude-sonnet-4-6", BaseURL: "https://api.anthropic.com", EnvKey: "ANTHROPIC_API_KEY"},
-	"deepseek":    {Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1", EnvKey: "DEEPSEEK_API_KEY"},
+	"deepseek":    {Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1", AnthropicBaseURL: "https://api.deepseek.com/anthropic", EnvKey: "DEEPSEEK_API_KEY"},
 	"kimi":        {Model: "kimi-k2.6", BaseURL: "https://api.moonshot.cn/v1", EnvKey: "MOONSHOT_API_KEY"},
 	"siliconflow": {Model: "deepseek-ai/DeepSeek-V3", BaseURL: "https://api.siliconflow.cn/v1", EnvKey: "SILICONFLOW_API_KEY"},
 }
@@ -37,10 +38,11 @@ func DefaultProviderConfig(provider string) ProviderDefaultConfig {
 
 // Config holds LLM model and credentials configurations
 type Config struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key"`
-	BaseURL  string `json:"base_url,omitempty"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	APIKey    string `json:"api_key"`
+	BaseURL   string `json:"base_url,omitempty"`
+	APIFormat string `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
 }
 
 // GetConfigPath returns the absolute path to user configuration file (~/.iroha.json)
@@ -68,11 +70,7 @@ func LoadConfig() (*Config, error) {
 					return nil, writeErr
 				}
 			} else {
-				// Default configuration (simulate mode)
-				return &Config{
-					Provider: "simulate",
-					Model:    ProviderDefaults["glm"].Model,
-				}, nil
+				return nil, fmt.Errorf("no configuration file found at %s; run with --config flag to set up a provider", path)
 			}
 		} else {
 			return nil, err
@@ -127,7 +125,7 @@ func RunConfigWizard() (*Config, error) {
 	// Load existing config to serve as defaults
 	existing, _ := LoadConfig()
 	if existing == nil {
-		existing = &Config{Provider: "simulate", Model: ProviderDefaults["glm"].Model}
+		existing = &Config{Provider: "glm", Model: ProviderDefaults["glm"].Model}
 	}
 
 	fmt.Println("\n\x1b[1;32m  Iroha Code CLI 配置向导 (Setup Wizard)\x1b[0m")
@@ -137,7 +135,6 @@ func RunConfigWizard() (*Config, error) {
 
 	// 1. Choose Provider
 	fmt.Println("  \x1b[36m1. 选择大模型提供商 (LLM Provider):\x1b[0m")
-	fmt.Println("     [s] simulate    - 本地高仿真离线沙箱模拟 (免 Key / 无网可用)")
 	fmt.Println("     [g] glm         - 智谱 AI GLM-4 官方 API")
 	fmt.Println("     [o] openai      - OpenAI 官方或任何兼容第三方 API (Ollama/本地模型)")
 	fmt.Println("     [c] claude      - Anthropic Claude 官方 API")
@@ -145,14 +142,12 @@ func RunConfigWizard() (*Config, error) {
 	fmt.Println("     [k] kimi        - Moonshot Kimi 官方 API")
 	fmt.Println("     [f] siliconflow - SiliconFlow (硅基流动) API (极速部署 DeepSeek V3/R1)")
 	fmt.Printf("     当前选择: \x1b[33m%s\x1b[0m\n", existing.Provider)
-	fmt.Print("     选择提供商 (s/g/o/c/d/k/f) [回车不修改]: ")
+	fmt.Print("     选择提供商 (g/o/c/d/k/f) [回车不修改]: ")
 	providerInput, _ := reader.ReadString('\n')
 	providerInput = strings.TrimSpace(strings.ToLower(providerInput))
 
 	provider := existing.Provider
-	if providerInput == "s" || providerInput == "simulate" {
-		provider = "simulate"
-	} else if providerInput == "g" || providerInput == "glm" {
+	if providerInput == "g" || providerInput == "glm" {
 		provider = "glm"
 	} else if providerInput == "o" || providerInput == "openai" {
 		provider = "openai"
@@ -212,13 +207,22 @@ func RunConfigWizard() (*Config, error) {
 	}
 
 	// 5. Input Base URL
+	defCfgForURL := DefaultProviderConfig(provider)
 	fmt.Println("\n  \x1b[36m4. 输入 API Base URL (自定义端点，留空代表官方端点):\x1b[0m")
-	fmt.Printf("     推荐端点: \x1b[90m%s\x1b[0m\n", defaultBaseURL)
+	fmt.Printf("     OpenAI 规范端点:    \x1b[90m%s\x1b[0m\n", defCfgForURL.BaseURL)
+	if defCfgForURL.AnthropicBaseURL != "" {
+		fmt.Printf("     Anthropic 规范端点: \x1b[90m%s\x1b[0m\n", defCfgForURL.AnthropicBaseURL)
+	}
 	if existing.BaseURL != "" {
-		fmt.Printf("     当前配置: \x1b[33m%s\x1b[0m\n", existing.BaseURL)
+		formatHint := "OpenAI"
+		if existing.APIFormat == "anthropic" {
+			formatHint = "Anthropic"
+		}
+		fmt.Printf("     当前配置: \x1b[33m%s\x1b[0m (\x1b[90m%s 规范\x1b[0m)\n", existing.BaseURL, formatHint)
 	} else {
 		fmt.Println("     当前配置: 官方默认端点")
 	}
+	fmt.Println("     提示: URL 需与所选 API 协议格式匹配 (步骤 5 可切换协议)")
 	fmt.Print("     请输入 Base URL (或 'default' 重置为官方默认) [回车不修改]: ")
 	baseURLInput, _ := reader.ReadString('\n')
 	baseURLInput = strings.TrimSpace(baseURLInput)
@@ -228,16 +232,51 @@ func RunConfigWizard() (*Config, error) {
 		baseURL = defaultBaseURL
 	} else if baseURLInput != "" {
 		baseURL = baseURLInput
-	} else if baseURL == "" && provider != "simulate" {
+	} else if baseURL == "" {
 		baseURL = defaultBaseURL
+	}
+
+	// 6. API Format (for providers that support multiple API protocols)
+	apiFormat := existing.APIFormat
+	supportsAnthropic := defCfgForURL.AnthropicBaseURL != ""
+	if supportsAnthropic {
+		fmt.Println("\n  \x1b[36m5. 选择 API 协议格式 (API Format):\x1b[0m")
+		fmt.Printf("     [o] openai     - OpenAI Chat Completions 规范 (端点: %s)\n", defCfgForURL.BaseURL)
+		fmt.Printf("     [a] anthropic  - Anthropic Messages 规范 (端点: %s)\n", defCfgForURL.AnthropicBaseURL)
+		if apiFormat == "anthropic" {
+			fmt.Printf("     当前配置: \x1b[33manthropic\x1b[0m\n")
+		} else {
+			fmt.Printf("     当前配置: \x1b[33mopenai (默认)\x1b[0m\n")
+		}
+		fmt.Print("     选择协议 (o/a) [回车不修改]: ")
+		formatInput, _ := reader.ReadString('\n')
+		formatInput = strings.TrimSpace(strings.ToLower(formatInput))
+		if formatInput == "a" || formatInput == "anthropic" {
+			apiFormat = "anthropic"
+			// Auto-suggest Anthropic-compatible base URL
+			if baseURL != defCfgForURL.AnthropicBaseURL {
+				fmt.Printf("     \x1b[33m提示: Anthropic 规范推荐端点为 %s，当前为 %s\x1b[0m\n", defCfgForURL.AnthropicBaseURL, baseURL)
+				fmt.Print("     是否自动切换到推荐端点? (y/n) [y]: ")
+				switchInput, _ := reader.ReadString('\n')
+				switchInput = strings.TrimSpace(strings.ToLower(switchInput))
+				if switchInput == "" || switchInput == "y" || switchInput == "yes" {
+					baseURL = defCfgForURL.AnthropicBaseURL
+				}
+			}
+		} else if formatInput == "o" || formatInput == "openai" {
+			apiFormat = "openai"
+		}
+	} else {
+		apiFormat = ""
 	}
 
 	// Save to config
 	cfg := &Config{
-		Provider: provider,
-		Model:    model,
-		APIKey:   apiKey,
-		BaseURL:  baseURL,
+		Provider:  provider,
+		Model:     model,
+		APIKey:    apiKey,
+		BaseURL:   baseURL,
+		APIFormat: apiFormat,
 	}
 
 	if err := SaveConfig(cfg); err != nil {

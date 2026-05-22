@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
@@ -471,4 +472,14 @@ func (t *DynamicMCPTool) Declaration() *genai.FunctionDeclaration {
 		Description:          t.description,
 		ParametersJsonSchema: t.schema,
 	}
+}
+
+func (t *DynamicMCPTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) error {
+	if req.Config == nil {
+		req.Config = &genai.GenerateContentConfig{}
+	}
+	req.Config.Tools = append(req.Config.Tools, &genai.Tool{
+		FunctionDeclarations: []*genai.FunctionDeclaration{t.Declaration()},
+	})
+	return nil
 }
