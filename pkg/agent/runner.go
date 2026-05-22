@@ -503,7 +503,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())
-		// Send to TUI with cancellation support
+	// Send to TUI with cancellation support
 	LogAudit(CatToolCall, "confirmation_sent", fmt.Sprintf("Sending confirmation prompt to TUI for tool %s", b.Name()), map[string]any{
 		"tool":   b.Name(),
 		"prompt": promptMsg,
@@ -523,7 +523,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Executing tool after approval: tool=%s approved=%s", b.Name(), approved)
-		if approved == "always" {
+	if approved == "always" {
 		// Dynamically add a temporary session allow rule
 		GlobalPermissionManager.AddRule(PermissionRule{
 			Tool:     b.Name(),

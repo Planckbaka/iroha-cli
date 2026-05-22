@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 )
 
-
 var anthropicToolIDCounter uint64
 
 func nextAnthropicToolID() string {
@@ -197,12 +196,11 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 			}
 		}
 
-
-						toolNames := make([]string, 0, len(tools))
-			for _, t := range tools {
-				toolNames = append(toolNames, t.Name)
-			}
-			DebugLog("[Anthropic] Sending %d tools: %v | Model: %s", len(tools), toolNames, a.modelName)
+		toolNames := make([]string, 0, len(tools))
+		for _, t := range tools {
+			toolNames = append(toolNames, t.Name)
+		}
+		DebugLog("[Anthropic] Sending %d tools: %v | Model: %s", len(tools), toolNames, a.modelName)
 		// Build request
 		anthropicReq := anthropicRequest{
 			Model:     a.modelName,
@@ -387,7 +385,7 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 					var parsedArgs map[string]any
 					fullInput := strings.Join(toolInputParts, "")
 					_ = json.Unmarshal([]byte(fullInput), &parsedArgs)
-						DebugLog("[Anthropic TOOL-CALL] Yielding FunctionCall: name=%s args=%v", currentToolName, parsedArgs)
+					DebugLog("[Anthropic TOOL-CALL] Yielding FunctionCall: name=%s args=%v", currentToolName, parsedArgs)
 
 					if !yield(&model.LLMResponse{
 						Content: &genai.Content{

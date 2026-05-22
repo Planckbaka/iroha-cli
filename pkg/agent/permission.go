@@ -83,7 +83,7 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			{Tool: "task_update", Behavior: "allow"},
 			{Tool: "task_list", Behavior: "allow"},
 			{Tool: "task_get", Behavior: "allow"},
-				{Tool: "check_background", Behavior: "allow"},
+			{Tool: "check_background", Behavior: "allow"},
 			{Tool: "schedule_create", Behavior: "allow"},
 			{Tool: "schedule_list", Behavior: "allow"},
 			{Tool: "schedule_delete", Behavior: "allow"},
