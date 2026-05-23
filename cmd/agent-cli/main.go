@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"iroha/pkg/agent"
 	"iroha/pkg/config"
@@ -27,6 +28,12 @@ func main() {
 	lastFlag := flag.Bool("last", false, "自动恢复最近一次活跃的会话")
 	sessionFlag := flag.String("session", "", "恢复指定的会话 ID")
 	forkFlag := flag.String("fork", "", "复制指定的历史会话并作为一个新的分支启动")
+	yesFlag := flag.Bool("yes", false, "跳过交互式权限确认，直接以 auto 模式运行")
+	yShortFlag := flag.Bool("y", false, "跳过交互式权限确认，直接以 auto 模式运行 (简写)")
+	planFlag := flag.Bool("plan", false, "跳过交互式选择，直接以 plan (只读) 模式运行")
+	pShortFlag := flag.Bool("p", false, "跳过交互式选择，直接以 plan (只读) 模式运行 (简写)")
+	defaultFlag := flag.Bool("default", false, "跳过交互式选择，直接以 default (询问) 模式运行")
+	dShortFlag := flag.Bool("d", false, "跳过交互式选择，直接以 default (询问) 模式运行 (简写)")
 	flag.Parse()
 
 	// Track which flags were explicitly set
@@ -164,8 +171,23 @@ func main() {
 		sessionID = uuid.New().String()
 	}
 
+	// 4.6. Resolve initial permission mode and startup prompt from trailing CLI arguments
+	var initialMode agent.PermissionMode
+	if *yesFlag || *yShortFlag {
+		initialMode = agent.ModeAuto
+	} else if *planFlag || *pShortFlag {
+		initialMode = agent.ModePlan
+	} else if *defaultFlag || *dShortFlag {
+		initialMode = agent.ModeDefault
+	}
+
+	startupPrompt := strings.Join(flag.Args(), " ")
+	if initialMode == "" && startupPrompt != "" {
+		initialMode = agent.ModeDefault
+	}
+
 	// 5. Create the TUI model
-	m := tui.NewModel(runner, sessionID, startInSessionPicker)
+	m := tui.NewModel(runner, sessionID, startInSessionPicker, initialMode, startupPrompt)
 
 	// 6. Create the Bubble Tea Program
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

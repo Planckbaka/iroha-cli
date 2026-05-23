@@ -77,3 +77,34 @@ func TestProviderAutoDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimateCost(t *testing.T) {
+	tests := []struct {
+		model        string
+		totalTokens  int
+		expectedCost float64
+	}{
+		// GPT-4o pricing: input 2.50, output 10.00
+		// For 1,000,000 tokens:
+		// input: 850,000 -> 850,000 * 2.50 / 1,000,000 = $2.125
+		// output: 150,000 -> 150,000 * 10.00 / 1,000,000 = $1.50
+		// total = $3.625
+		{"gpt-4o", 1000000, 3.625},
+		// Claude 3.5 Sonnet pricing: input 3.00, output 15.00
+		// For 100,000 tokens:
+		// input: 85,000 -> 85,000 * 3.00 / 1,000,000 = $0.255
+		// output: 15,000 -> 15,000 * 15.00 / 1,000,000 = $0.225
+		// total = $0.48
+		{"claude-3-5-sonnet", 100000, 0.48},
+		// Zero or negative tokens should be $0.00
+		{"gpt-4o", 0, 0.0},
+		{"claude-sonnet", -10, 0.0},
+	}
+
+	for _, tt := range tests {
+		cost := EstimateCost(tt.model, tt.totalTokens)
+		if cost != tt.expectedCost {
+			t.Errorf("Model %s with %d tokens: expected cost $%f, got $%f", tt.model, tt.totalTokens, tt.expectedCost, cost)
+		}
+	}
+}

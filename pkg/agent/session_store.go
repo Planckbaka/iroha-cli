@@ -32,6 +32,8 @@ type SessionMetadata struct {
 	CWD            string    `json:"cwd"`
 	FirstPrompt    string    `json:"first_prompt"`
 	LastUpdateTime time.Time `json:"last_update_time"`
+	TotalTokens    int       `json:"total_tokens"`
+	TotalCost      float64   `json:"total_cost"`
 }
 
 // PersistentSessionService wraps a session.Service delegate (typically InMemoryService)
@@ -267,11 +269,32 @@ func (s *PersistentSessionService) ListSavedSessions() ([]SessionMetadata, error
 			firstPrompt = getFirstPrompt(serialized.Events)
 		}
 
+		totalTextLen := 0
+		for _, ev := range serialized.Events {
+			if ev == nil {
+				continue
+			}
+			if ev.Content != nil {
+				for _, part := range ev.Content.Parts {
+					totalTextLen += len(part.Text)
+				}
+			}
+			if ev.LLMResponse.Content != nil {
+				for _, part := range ev.LLMResponse.Content.Parts {
+					totalTextLen += len(part.Text)
+				}
+			}
+		}
+		totalTokens := totalTextLen / 4
+		totalCost := float64(totalTokens) * 2.0 / 1000000.0 // Baseline estimate: $2.00 per million tokens
+
 		metaList = append(metaList, SessionMetadata{
 			ID:             serialized.ID,
 			CWD:            serialized.CWD,
 			FirstPrompt:    firstPrompt,
 			LastUpdateTime: serialized.LastUpdateTime,
+			TotalTokens:    totalTokens,
+			TotalCost:      totalCost,
 		})
 	}
 

@@ -57,10 +57,20 @@ var Bridge = &ConfirmationBridge{
 	CancelChan:   make(chan struct{}),
 }
 
-func (b *ConfirmationBridge) ResetCancel() {
+func (b *ConfirmationBridge) Reset() {
 	b.cancelMu.Lock()
+	defer b.cancelMu.Unlock()
+
+	// Drain stale prompts
+	for len(b.PromptChan) > 0 {
+		<-b.PromptChan
+	}
+	// Drain stale responses
+	for len(b.ResponseChan) > 0 {
+		<-b.ResponseChan
+	}
+	// Reset CancelChan
 	b.CancelChan = make(chan struct{})
-	b.cancelMu.Unlock()
 }
 
 func (b *ConfirmationBridge) CancelChanRead() <-chan struct{} {
@@ -266,7 +276,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 	})
 
 	// Reset the cancel channel for this execution turn
-	Bridge.ResetCancel()
+	Bridge.Reset()
 	go func() {
 		<-ctx.Done()
 		Bridge.Cancel()
@@ -350,6 +360,63 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
 			"session_id": sessionID,
 		})
+
+		// Trigger Aider-style Git Auto-Commit if repository has staged/unstaged changes
+		if hasChanges, err := GitHasChanges(); err == nil && hasChanges {
+			if diffStr, err := GitGetStagedDiff(); err == nil && strings.TrimSpace(diffStr) != "" {
+				if len(diffStr) > 8000 {
+					diffStr = diffStr[:8000]
+				}
+
+				gitPrompt := fmt.Sprintf(`你是一个专业的 Git 提交助手。请根据以下代码变更差异 (Git Diff)，生成一行精炼、语义化的 Git Commit Message。
+  
+要求：
+1. 必须使用语义化提交规范 (例如 feat: ..., fix: ..., chore: ..., refactor: ..., test: ...)。
+2. 必须控制在 50 个字符以内。
+3. 必须直接返回提交消息本身，不要包含任何 markdown 标记、双引号、单引号、段落或解释性文字。
+  
+[代码变更差异 (Git Diff)]:
+%s`, diffStr)
+
+				req := &model.LLMRequest{
+					Contents: []*genai.Content{
+						{
+							Role: "user",
+							Parts: []*genai.Part{
+								{Text: gitPrompt},
+							},
+						},
+					},
+				}
+
+				var commitMsgBuilder strings.Builder
+				events := cr.llmModel.GenerateContent(ctx, req, false)
+				for resp, err := range events {
+					if err == nil && resp != nil && resp.Content != nil && len(resp.Content.Parts) > 0 {
+						commitMsgBuilder.WriteString(resp.Content.Parts[0].Text)
+					}
+				}
+
+				commitMsg := strings.TrimSpace(commitMsgBuilder.String())
+				commitMsg = strings.Trim(commitMsg, "\"`'")
+				if commitMsg == "" {
+					commitMsg = "chore: update files by iroha"
+				}
+
+				fullCommitMsg := fmt.Sprintf("[iroha] %s", commitMsg)
+				if commitErr := GitCommit(fullCommitMsg); commitErr == nil {
+					LogInfo(CatSystem, "git_auto_commit", fmt.Sprintf("Aider-style Git auto-commit completed: %s", fullCommitMsg), map[string]any{
+						"session_id": sessionID,
+						"msg":        fullCommitMsg,
+					})
+				} else {
+					LogError(CatSystem, "git_auto_commit_failed", "Aider-style Git auto-commit failed", commitErr, map[string]any{
+						"session_id": sessionID,
+					})
+				}
+			}
+		}
+
 		onDone()
 	}()
 }

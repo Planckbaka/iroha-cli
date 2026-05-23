@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,8 +113,18 @@ func (bm *BackgroundManager) Run(command string) (string, error) {
 func (bm *BackgroundManager) execute(taskID string, command string) {
 	cmd := exec.Command("sh", "-c", command)
 	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
+
+	logPath := filepath.Join(bm.dir, fmt.Sprintf("%s.log", taskID))
+	logFile, fileErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	var writer io.Writer
+	if fileErr == nil {
+		defer func() { _ = logFile.Close() }()
+		writer = io.MultiWriter(&outBuf, logFile)
+	} else {
+		writer = &outBuf
+	}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 
 	done := make(chan error, 1)
 	go func() {
@@ -154,7 +165,6 @@ func (bm *BackgroundManager) execute(taskID string, command string) {
 	preview := bm.preview(output, 500)
 
 	// Save detailed log output
-	logPath := filepath.Join(bm.dir, fmt.Sprintf("%s.log", taskID))
 	_ = os.WriteFile(logPath, []byte(output), 0644)
 
 	bm.mu.Lock()

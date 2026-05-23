@@ -3,11 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"iroha/pkg/agent"
+	"iroha/pkg/config"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -76,6 +79,17 @@ type AgentErrorMsg struct {
 
 type AgentDoneMsg struct{}
 
+type DoctorResultMsg struct {
+	Report string
+}
+
+func runDoctorCmd() tea.Cmd {
+	return func() tea.Msg {
+		report := RunDiagnostics()
+		return DoctorResultMsg{Report: report}
+	}
+}
+
 type ProgramRef struct {
 	P *tea.Program
 }
@@ -100,6 +114,9 @@ var AllSlashCommands = []SlashMenuItem{
 	{"/mcp", "查看 MCP 插件状态"},
 	{"/bg", "查看后台任务状态"},
 	{"/sessions", "查看和切换会话历史"},
+	{"/help", "查看系统使用帮助、键盘快捷键与指令面板"},
+	{"/commands", "查看所有支持的斜杠快捷指令列表"},
+	{"/doctor", "运行系统开发环境诊断，检测 API、网络、Git 与工具链状态"},
 	{"/exit", "退出程序"},
 }
 
@@ -136,7 +153,8 @@ type Model struct {
 	lastStreamUpdate       time.Time
 
 	// Token usage tracking
-	TotalTokens int
+	TotalTokens      int
+	TotalSessionCost float64
 
 	// Status tag parsing
 	CurrentStatusText string
@@ -163,6 +181,23 @@ type Model struct {
 	OnEvent func(*session.Event)
 	OnError func(error)
 	OnDone  func()
+
+	// Human-in-the-Loop Confirmation listener state tracking
+	ConfirmationListenerActive bool
+
+	// Startup prompt passed from command line
+	StartupPrompt string
+
+	// Tab auto-completion fields for files and directories
+	PathCompletionActive   bool
+	PathCompletionItems    []string
+	PathCompletionIndex    int
+	PathCompletionOriginal string
+	PathCompletionRest     string
+
+	// Premium interactive Diff fields
+	ConfirmDiffText   string
+	ConfirmDiffActive bool
 }
 
 func SetupTextArea() textarea.Model {
@@ -179,7 +214,7 @@ func SetupTextArea() textarea.Model {
 	return ta
 }
 
-func NewModel(runner *agent.CustomRunner, sessionID string, startInSessionPicker bool) Model {
+func NewModel(runner *agent.CustomRunner, sessionID string, startInSessionPicker bool, initialMode agent.PermissionMode, startupPrompt string) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = StyleThinking
@@ -192,20 +227,31 @@ func NewModel(runner *agent.CustomRunner, sessionID string, startInSessionPicker
 	vp.SetContent("Welcome to Iroha.")
 
 	m := Model{
-		State:                statePermissionSelect,
-		TextArea:             ta,
-		Viewport:             vp,
-		Spinner:              s,
-		HistoryManager:       NewHistoryManager(),
-		History:              make([]string, 0),
-		Runner:               runner,
-		Ctx:                  ctx,
-		Cancel:               cancel,
-		ProgramRef:           pref,
-		SessionStartTime:     time.Now(),
-		PermSelectIndex:      1, // Default to "default" mode (index 1)
-		SessionID:            sessionID,
-		StartInSessionPicker: startInSessionPicker,
+		State:                      statePermissionSelect,
+		TextArea:                   ta,
+		Viewport:                   vp,
+		Spinner:                    s,
+		HistoryManager:             NewHistoryManager(),
+		History:                    make([]string, 0),
+		Runner:                     runner,
+		Ctx:                        ctx,
+		Cancel:                     cancel,
+		ProgramRef:                 pref,
+		SessionStartTime:           time.Now(),
+		PermSelectIndex:            1, // Default to "default" mode (index 1)
+		SessionID:                  sessionID,
+		StartInSessionPicker:       startInSessionPicker,
+		ConfirmationListenerActive: true,
+		StartupPrompt:              startupPrompt,
+	}
+
+	if initialMode != "" {
+		_ = agent.GlobalPermissionManager.SetMode(initialMode)
+		if startInSessionPicker {
+			m.State = stateSessionSelect
+		} else {
+			m.State = statePrompt
+		}
 	}
 
 	if sessionID != "" && !startInSessionPicker {
@@ -235,13 +281,23 @@ func NewModel(runner *agent.CustomRunner, sessionID string, startInSessionPicker
 	return m
 }
 
+type StartupPromptMsg struct {
+	Prompt string
+}
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textarea.Blink,
 		m.Spinner.Tick,
 		m.listenToConfirmationBridge(), // Listen for sensitive tool auth calls
 		m.listenToToolBridge(),         // Listen for real-time tool execution status
-	)
+	}
+	if m.StartupPrompt != "" {
+		cmds = append(cmds, func() tea.Msg {
+			return StartupPromptMsg{Prompt: m.StartupPrompt}
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 // listenToConfirmationBridge waits on the Bridge's PromptChan and sends a message to the TUI
@@ -268,6 +324,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case StartupPromptMsg:
+		if msg.Prompt == "" {
+			return m, nil
+		}
+		// Record in history
+		m.HistoryManager.Add(msg.Prompt)
+
+		m.CurrentPrompt = msg.Prompt
+		m.StreamedText = ""
+		m = m.transitionTo(stateThinking)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+
+		m.RoundCount++
+		m.RoundStartTime = time.Now()
+		m.ActiveTool = agent.ToolStatus{}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.Ctx = ctx
+		m.Cancel = cancel
+
+		m.Runner.Execute(m.Ctx, "user-dev", m.SessionID, m.CurrentPrompt,
+			m.OnEvent, m.OnError, m.OnDone,
+		)
+		return m, m.Spinner.Tick
+
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
@@ -299,6 +381,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				"state":      m.State.String(),
 				"session_id": m.SessionID,
 			})
+		}
+
+		if msg.Type == tea.KeyCtrlC {
+			if m.State == statePermissionSelect || m.State == stateSessionSelect {
+				return m, tea.Quit
+			}
+			if m.State != statePrompt {
+				// Cancel current agent execution
+				m.Cancel()
+				elapsed := time.Duration(0)
+				if !m.RoundStartTime.IsZero() {
+					elapsed = time.Since(m.RoundStartTime)
+				}
+				m.StreamedText += "\n" + RenderCancelCard(elapsed)
+				cmd = m.finalizeTurn()
+				return m, cmd
+			}
+			return m, tea.Quit
 		}
 
 		// Handle permission select state FIRST
@@ -408,21 +508,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					resp = "always"
 				}
 				agent.Bridge.ResponseChan <- resp
+				m.ConfirmationListenerActive = true
 				return m, m.listenToConfirmationBridge()
 			}
 
 			switch keyStr {
+			case "d":
+				if m.ConfirmDiffText != "" {
+					m.ConfirmDiffActive = !m.ConfirmDiffActive
+					m.Viewport.SetContent(m.renderViewportContent())
+					if m.ConfirmDiffActive {
+						m.Viewport.GotoTop()
+					} else {
+						m.Viewport.GotoBottom()
+					}
+					return m, nil
+				}
 			case "y":
 				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "y"
+				m.ConfirmationListenerActive = true
 				return m, m.listenToConfirmationBridge()
 			case "n", "esc":
 				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "n"
+				m.ConfirmationListenerActive = true
 				return m, m.listenToConfirmationBridge()
 			case "a":
 				m = m.transitionTo(stateThinking)
 				agent.Bridge.ResponseChan <- "always"
+				m.ConfirmationListenerActive = true
 				return m, m.listenToConfirmationBridge()
 			case "shift+tab":
 				m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
@@ -435,15 +550,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.Type {
-		case tea.KeyCtrlC:
-			if m.State != statePrompt {
-				// Cancel current agent execution
-				m.Cancel()
-				m.StreamedText += "\n\x1b[31m[操作已被用户取消]\x1b[0m"
-				m.finalizeTurn()
-				return m, nil
-			}
-			return m, tea.Quit
 
 		case tea.KeyPgUp:
 			m.Viewport.HalfPageUp()
@@ -478,12 +584,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyTab:
-			if m.State == statePrompt && m.SlashMenuActive && len(m.SlashMenuItems) > 0 {
-				selected := m.SlashMenuItems[m.SlashMenuIndex]
-				m.TextArea.SetValue(selected.Command + " ")
-				m.SlashMenuActive = false
-				m.SlashMenuItems = nil
-				return m, nil
+			if m.State == statePrompt {
+				if m.SlashMenuActive && len(m.SlashMenuItems) > 0 {
+					selected := m.SlashMenuItems[m.SlashMenuIndex]
+					m.TextArea.SetValue(selected.Command + " ")
+					m.SlashMenuActive = false
+					m.SlashMenuItems = nil
+					m.resetPathCompletion()
+					return m, nil
+				}
+
+				// Handle path auto-completion cycling
+				if m.PathCompletionActive && len(m.PathCompletionItems) > 0 {
+					m.PathCompletionIndex = (m.PathCompletionIndex + 1) % len(m.PathCompletionItems)
+					matched := m.PathCompletionItems[m.PathCompletionIndex]
+					m.TextArea.SetValue(m.PathCompletionRest + matched)
+					m.TextArea.SetCursor(len(m.PathCompletionRest) + len(matched))
+					return m, nil
+				}
+
+				// Perform initial path scanning
+				val := m.TextArea.Value()
+				var prefix, rest string
+				lastSpace := strings.LastIndex(val, " ")
+				if lastSpace == -1 {
+					prefix = val
+					rest = ""
+				} else {
+					prefix = val[lastSpace+1:]
+					rest = val[:lastSpace+1]
+				}
+
+				matches := m.matchLocalPaths(prefix)
+				if len(matches) > 0 {
+					m.PathCompletionActive = true
+					m.PathCompletionItems = matches
+					m.PathCompletionIndex = 0
+					m.PathCompletionOriginal = prefix
+					m.PathCompletionRest = rest
+
+					m.TextArea.SetValue(rest + matches[0])
+					m.TextArea.SetCursor(len(rest) + len(matches[0]))
+					return m, nil
+				}
 			}
 
 		case tea.KeyEscape:
@@ -797,6 +940,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 
+					if cmdName == "/help" || cmdName == "/commands" {
+						m.HistoryManager.Add(inputVal)
+						userLog := StyleUserMsg.Render("> " + inputVal)
+						m.History = append(m.History, userLog, RenderHelpDashboard())
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
+						m.Viewport.SetContent(m.renderViewportContent())
+						m.Viewport.GotoBottom()
+						return m, nil
+					}
+
+					if cmdName == "/doctor" {
+						m.HistoryManager.Add(inputVal)
+						userLog := StyleUserMsg.Render("> " + inputVal)
+						m.History = append(m.History, userLog)
+						m.TextArea.SetValue("")
+						m.TextArea.SetHeight(2)
+
+						m = m.transitionTo(stateThinking)
+						m.ActiveTool = agent.ToolStatus{
+							Name:    "🩺 环境诊断",
+							Running: true,
+						}
+						m.RoundStartTime = time.Now()
+
+						return m, runDoctorCmd()
+					}
+
 					if cmdName == "/sessions" {
 						m.HistoryManager.Add(inputVal)
 						m.TextArea.SetValue("")
@@ -920,7 +1091,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ShellStreamActive = false
 			var logLine string
 			if status.Success {
-				logLine = "\n\n" + RenderToolSuccessCard(status.Name, status.Args, status.Duration) + "\n"
+				logLine = "\n" + RenderToolSuccessCard(status.Name, status.Args, status.Duration) + "\n"
 			} else {
 				logLine = "\n\n" + RenderToolErrorCard(status.Name, status.Args, status.Duration, status.Error) + "\n"
 			}
@@ -935,8 +1106,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConfirmationRequiredMsg:
 		m = m.transitionTo(stateConfirming)
-		m.ConfirmationPrompt = msg.Prompt
 		m.ConfirmSelectIndex = 0
+		m.ConfirmationListenerActive = false
+
+		// Extract Unified Diff if present in prompt to avoid massive bloat in simple confirmation cards
+		const diffMarker = "\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n"
+		if idx := strings.Index(msg.Prompt, diffMarker); idx != -1 {
+			m.ConfirmationPrompt = msg.Prompt[:idx]
+			m.ConfirmDiffText = msg.Prompt[idx+len(diffMarker):]
+			m.ConfirmDiffActive = false
+		} else {
+			altMarker := "\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m"
+			if idx := strings.Index(msg.Prompt, altMarker); idx != -1 {
+				m.ConfirmationPrompt = msg.Prompt[:idx]
+				m.ConfirmDiffText = msg.Prompt[idx+len(altMarker):]
+				m.ConfirmDiffActive = false
+			} else {
+				m.ConfirmationPrompt = msg.Prompt
+				m.ConfirmDiffText = ""
+				m.ConfirmDiffActive = false
+			}
+		}
+
 		m.Viewport.SetContent(m.renderViewportContent())
 		m.Viewport.GotoBottom()
 		// IMPORTANT: Do NOT re-register listenToConfirmationBridge here.
@@ -944,14 +1135,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// This prevents a race where we listen again before the response is sent.
 		return m, nil
 
-	case AgentErrorMsg:
-		m.LastError = msg.Err
-		m.finalizeTurn()
+	case DoctorResultMsg:
+		m = m.transitionTo(statePrompt)
+		m.ActiveTool = agent.ToolStatus{}
+		m.History = append(m.History, msg.Report)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
 		return m, nil
 
+	case AgentErrorMsg:
+		m.LastError = msg.Err
+		cmd = m.finalizeTurn()
+		return m, cmd
+
 	case AgentDoneMsg:
-		m.finalizeTurn()
-		return m, nil
+		cmd = m.finalizeTurn()
+		return m, cmd
 
 	case spinner.TickMsg:
 		m.Spinner, cmd = m.Spinner.Update(msg)
@@ -976,6 +1175,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update slash menu if the input changed
 		if newVal != prevVal {
 			m.updateSlashMenu(newVal)
+
+			// Reset path completion cycle if text changed via a non-Tab key
+			isKeyTab := false
+			if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.Type == tea.KeyTab {
+				isKeyTab = true
+			}
+			if !isKeyTab {
+				m.resetPathCompletion()
+			}
 		}
 
 		// Dynamic auto-scaling height of Textarea between 2 and 6 lines
@@ -1000,7 +1208,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) finalizeTurn() {
+func (m *Model) finalizeTurn() tea.Cmd {
 	*m = m.transitionTo(statePrompt)
 	if !m.RoundStartTime.IsZero() {
 		m.LastRoundDuration = time.Since(m.RoundStartTime)
@@ -1009,7 +1217,7 @@ func (m *Model) finalizeTurn() {
 	m.ActiveTool = agent.ToolStatus{}
 	m.CurrentStatusText = ""
 
-	// 更新 token 计数
+	// 更新 token 计数与资费估算
 	if m.Runner != nil {
 		usage := m.Runner.GetTokenUsage()
 		if usage > 0 {
@@ -1018,6 +1226,7 @@ func (m *Model) finalizeTurn() {
 			// Fallback: 本地估算（字符数 / 4）
 			m.TotalTokens = len(m.StreamedText) / 4
 		}
+		m.TotalSessionCost = config.EstimateCost(m.Runner.ModelName(), m.TotalTokens)
 	}
 
 	userLog := StyleUserMsg.Render("> " + m.CurrentPrompt)
@@ -1034,6 +1243,13 @@ func (m *Model) finalizeTurn() {
 	m.TextArea.Focus()
 	m.Viewport.SetContent(m.renderViewportContent())
 	m.Viewport.GotoBottom()
+
+	var cmd tea.Cmd
+	if !m.ConfirmationListenerActive {
+		m.ConfirmationListenerActive = true
+		cmd = m.listenToConfirmationBridge()
+	}
+	return cmd
 }
 
 func extractCommand(args any) string {
@@ -1046,6 +1262,11 @@ func extractCommand(args any) string {
 }
 
 func (m *Model) renderViewportContent() string {
+	// If interactive Diff is active during confirmation, only render the Diff view in the Viewport
+	if m.State == stateConfirming && m.ConfirmDiffActive && m.ConfirmDiffText != "" {
+		return m.ConfirmDiffText + "\n\n" + RenderConfirmCardWithDiff(m.ConfirmationPrompt, m.ConfirmSelectIndex, true, true)
+	}
+
 	var sb strings.Builder
 
 	todoRender := RenderTodoDashboard()
@@ -1091,7 +1312,8 @@ func (m *Model) renderViewportContent() string {
 			sb.WriteString("\n" + StyleAgentMsg.Render(m.Spinner.View()+StyleThinking.Render(" "+activity)))
 		}
 	case stateConfirming:
-		sb.WriteString("\n" + StyleAgentMsg.Render(RenderMarkdown(m.StreamedText)+"\n"+RenderConfirmCard(m.ConfirmationPrompt, m.ConfirmSelectIndex)))
+		card := RenderConfirmCardWithDiff(m.ConfirmationPrompt, m.ConfirmSelectIndex, m.ConfirmDiffText != "", false)
+		sb.WriteString("\n" + StyleAgentMsg.Render(RenderMarkdown(m.StreamedText)+"\n"+card))
 	}
 
 	return sb.String()
@@ -1131,6 +1353,12 @@ func (m Model) View() string {
 	// TextArea taking up bottom space
 	sb.WriteString(m.TextArea.View())
 	sb.WriteString("\n")
+
+	// Render path auto-completion suggestion line if active
+	if m.PathCompletionActive && len(m.PathCompletionItems) > 0 {
+		sb.WriteString(RenderPathCompletionBar(m.PathCompletionItems, m.PathCompletionIndex, m.Width))
+		sb.WriteString("\n")
+	}
 
 	// Status Bar at the bottom
 	sb.WriteString(RenderStatusBar(m))
@@ -1261,4 +1489,84 @@ func (m *Model) LoadHistoryFromSession(sessionID string) {
 		agentLog := StyleAgentMsg.Render(RenderMarkdown(t.response))
 		m.History = append(m.History, userLog, agentLog)
 	}
+
+	// Restore token usage and cost estimation for resurrected session
+	totalTextLen := 0
+	for _, t := range turns {
+		totalTextLen += len(t.prompt) + len(t.response)
+	}
+	if totalTextLen > 0 {
+		m.TotalTokens = totalTextLen / 4
+		if m.Runner != nil {
+			m.TotalSessionCost = config.EstimateCost(m.Runner.ModelName(), m.TotalTokens)
+		}
+	}
+}
+
+// matchLocalPaths scans the workspace directory for items matching the prefix.
+func (m Model) matchLocalPaths(prefix string) []string {
+	if prefix == "" {
+		return nil
+	}
+
+	// Determine directory and file prefix
+	var dir, filePrefix string
+	if strings.Contains(prefix, "/") {
+		lastSlash := strings.LastIndex(prefix, "/")
+		dir = prefix[:lastSlash]
+		filePrefix = prefix[lastSlash+1:]
+		if dir == "" {
+			dir = "/"
+		}
+	} else {
+		dir = "."
+		filePrefix = prefix
+	}
+
+	// Prevent directory traversal escapes for safety
+	cleanDir := filepath.Clean(dir)
+	if cleanDir == ".." || strings.HasPrefix(cleanDir, "../") || strings.HasPrefix(cleanDir, "/") {
+		// Secure sandbox limit - lock to workspace
+		return nil
+	}
+
+	entries, err := os.ReadDir(cleanDir)
+	if err != nil {
+		return nil
+	}
+
+	var matches []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip hidden git files and local state dirs unless searching for dotfiles
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(filePrefix, ".") {
+			continue
+		}
+
+		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(filePrefix)) {
+			// Construct match path
+			var matchPath string
+			if cleanDir == "." {
+				matchPath = name
+			} else {
+				matchPath = filepath.Join(cleanDir, name)
+			}
+
+			if entry.IsDir() {
+				matchPath += "/"
+			}
+			matches = append(matches, matchPath)
+		}
+	}
+
+	return matches
+}
+
+// resetPathCompletion clears path auto-completion states.
+func (m *Model) resetPathCompletion() {
+	m.PathCompletionActive = false
+	m.PathCompletionItems = nil
+	m.PathCompletionIndex = 0
+	m.PathCompletionOriginal = ""
+	m.PathCompletionRest = ""
 }

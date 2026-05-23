@@ -104,4 +104,44 @@ func TestPersistentSessionService(t *testing.T) {
 	if getRes.Session.ID() != "sess-2" {
 		t.Errorf("expected loaded session ID to be sess-2, got %s", getRes.Session.ID())
 	}
+
+	// Test 6: Verify SessionMetadata TotalTokens and TotalCost via mock session JSON
+	mockJSON := `{
+		"id": "sess-mock",
+		"cwd": "/mock/path",
+		"first_prompt": "Hello Doctor",
+		"events": [
+			{
+				"content": {
+					"parts": [
+						{"text": "This is a mock event prompt to test the token calculation in ListSavedSessions of persistent store"}
+					]
+				}
+			}
+		]
+	}`
+	err = os.WriteFile(filepath.Join(tmpDir, "sess-mock.json"), []byte(mockJSON), 0644)
+	if err != nil {
+		t.Fatalf("failed to write mock session file: %v", err)
+	}
+
+	metaList, err = pService.ListSavedSessions()
+	if err != nil {
+		t.Fatalf("failed to list sessions: %v", err)
+	}
+	foundMock := false
+	for _, m := range metaList {
+		if m.ID == "sess-mock" {
+			foundMock = true
+			if m.TotalTokens <= 0 {
+				t.Errorf("expected TotalTokens to be calculated, got %d", m.TotalTokens)
+			}
+			if m.TotalCost <= 0 {
+				t.Errorf("expected TotalCost to be calculated, got %f", m.TotalCost)
+			}
+		}
+	}
+	if !foundMock {
+		t.Error("expected to find sess-mock in metadata list")
+	}
 }

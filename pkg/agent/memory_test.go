@@ -230,3 +230,42 @@ func newMemoryManagerInDir(t *testing.T, dir string) *MemoryManager {
 	t.Cleanup(func() { _ = os.Chdir(original) })
 	return NewMemoryManager()
 }
+
+func TestMemoryManager_BuildSystemPromptSection_Filtering(t *testing.T) {
+	dir := t.TempDir()
+	mm := newMemoryManagerInDir(t, dir)
+
+	_ = mm.Save("prefer_pnpm", "User prefers pnpm", MemTypeUser, "Always use pnpm.")
+	_ = mm.Save("no_snapshots", "Do not edit snapshots", MemTypeFeedback, "Never edit snapshots.")
+	_ = mm.Save("legacy_dir", "Deployment dependencies in legacy directory", MemTypeProject, "Do not delete.")
+
+	// Case 1: Empty filter prompt -> should inject everything
+	allSec := mm.BuildSystemPromptSection()
+	if !strings.Contains(allSec, "prefer_pnpm") || !strings.Contains(allSec, "no_snapshots") || !strings.Contains(allSec, "legacy_dir") {
+		t.Error("expected all memories to be injected when no prompt is provided")
+	}
+
+	// Case 2: Match pnpm -> should inject feedback (always) and prefer_pnpm, but NOT legacy_dir
+	pnpmSec := mm.BuildSystemPromptSection("I want to run a pnpm build command")
+	if !strings.Contains(pnpmSec, "no_snapshots") {
+		t.Error("expected feedback memory to be injected always")
+	}
+	if !strings.Contains(pnpmSec, "prefer_pnpm") {
+		t.Error("expected matched prefer_pnpm to be injected")
+	}
+	if strings.Contains(pnpmSec, "legacy_dir") {
+		t.Error("expected unmatched legacy_dir to be filtered out")
+	}
+
+	// Case 3: Match legacy -> should inject feedback and legacy_dir, but NOT prefer_pnpm
+	legacySec := mm.BuildSystemPromptSection("Clean up the legacy build folders")
+	if !strings.Contains(legacySec, "no_snapshots") {
+		t.Error("expected feedback memory to be injected always")
+	}
+	if !strings.Contains(legacySec, "legacy_dir") {
+		t.Error("expected matched legacy_dir to be injected")
+	}
+	if strings.Contains(legacySec, "prefer_pnpm") {
+		t.Error("expected unmatched prefer_pnpm to be filtered out")
+	}
+}

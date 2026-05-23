@@ -288,3 +288,73 @@ func RunConfigWizard() (*Config, error) {
 
 	return cfg, nil
 }
+
+// ModelPricing holds the input and output token costs per million tokens in USD
+type ModelPricing struct {
+	InputCostPerMillion  float64
+	OutputCostPerMillion float64
+}
+
+// ModelPricingMap maps model identifier substrings to their Input/Output pricing per million tokens in USD.
+var ModelPricingMap = map[string]ModelPricing{
+	"claude-3-5-sonnet": {InputCostPerMillion: 3.00, OutputCostPerMillion: 15.00},
+	"claude-sonnet":     {InputCostPerMillion: 3.00, OutputCostPerMillion: 15.00},
+	"claude-3-5-haiku":  {InputCostPerMillion: 0.80, OutputCostPerMillion: 4.00},
+	"claude-3-haiku":    {InputCostPerMillion: 0.25, OutputCostPerMillion: 1.25},
+	"claude-3-opus":     {InputCostPerMillion: 15.00, OutputCostPerMillion: 75.00},
+	"gpt-4o-mini":       {InputCostPerMillion: 0.15, OutputCostPerMillion: 0.60},
+	"gpt-4o":            {InputCostPerMillion: 2.50, OutputCostPerMillion: 10.00},
+	"o1-mini":           {InputCostPerMillion: 3.00, OutputCostPerMillion: 12.00},
+	"o1":                {InputCostPerMillion: 15.00, OutputCostPerMillion: 60.00},
+	"o3-mini":           {InputCostPerMillion: 1.10, OutputCostPerMillion: 4.40},
+	"deepseek-chat":     {InputCostPerMillion: 0.14, OutputCostPerMillion: 0.28},
+	"deepseek-v3":       {InputCostPerMillion: 0.14, OutputCostPerMillion: 0.28},
+	"deepseek-r1":       {InputCostPerMillion: 0.55, OutputCostPerMillion: 2.19},
+	"glm-4-flash":       {InputCostPerMillion: 0.00, OutputCostPerMillion: 0.00},
+	"glm-4":             {InputCostPerMillion: 0.10, OutputCostPerMillion: 0.10},
+	"kimi":              {InputCostPerMillion: 1.00, OutputCostPerMillion: 1.00},
+	"moonshot":          {InputCostPerMillion: 1.00, OutputCostPerMillion: 1.00},
+}
+
+// EstimateCost estimates session cost in USD based on model name and total token count.
+// Uses fuzzy model name normalization and a realistic 85%/15% input/output token ratio.
+func EstimateCost(modelName string, totalTokens int) float64 {
+	if totalTokens <= 0 {
+		return 0.0
+	}
+	modelName = strings.ToLower(modelName)
+	pricing := ModelPricing{InputCostPerMillion: 1.50, OutputCostPerMillion: 6.00} // Default fallback pricing
+	found := false
+
+	// Fuzzy match
+	for k, p := range ModelPricingMap {
+		if strings.Contains(modelName, k) {
+			pricing = p
+			found = true
+			break
+		}
+	}
+
+	// Try provider heuristic if no direct match
+	if !found {
+		if strings.Contains(modelName, "gpt") || strings.Contains(modelName, "openai") {
+			pricing = ModelPricingMap["gpt-4o"]
+		} else if strings.Contains(modelName, "claude") {
+			pricing = ModelPricingMap["claude-sonnet"]
+		} else if strings.Contains(modelName, "deepseek") {
+			pricing = ModelPricingMap["deepseek-chat"]
+		} else if strings.Contains(modelName, "glm") || strings.Contains(modelName, "zhipu") {
+			pricing = ModelPricingMap["glm-4"]
+		} else if strings.Contains(modelName, "kimi") || strings.Contains(modelName, "moonshot") {
+			pricing = ModelPricingMap["kimi"]
+		}
+	}
+
+	inputTokens := 0.85 * float64(totalTokens)
+	outputTokens := 0.15 * float64(totalTokens)
+
+	inputCost := (inputTokens / 1000000.0) * pricing.InputCostPerMillion
+	outputCost := (outputTokens / 1000000.0) * pricing.OutputCostPerMillion
+
+	return inputCost + outputCost
+}

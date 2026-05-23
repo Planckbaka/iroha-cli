@@ -35,7 +35,8 @@ type HookDef struct {
 
 // HookConfig mirrors the structure of a hooks.json config file.
 type HookConfig struct {
-	Hooks map[string][]HookDef `json:"hooks"`
+	Hooks   map[string][]HookDef `json:"hooks"`
+	Timeout int                  `json:"timeout,omitempty"`
 }
 
 // HookContext carries per-call context passed to hooks via environment variables.
@@ -85,7 +86,7 @@ var GlobalHookManager = NewHookManager()
 func NewHookManager() *HookManager {
 	hm := &HookManager{
 		hooks:   make(map[string][]HookDef),
-		timeout: 30 * time.Second,
+		timeout: 5 * time.Second,
 	}
 	hm.load()
 	return hm
@@ -143,6 +144,9 @@ func (hm *HookManager) loadFile(path string) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		LogError(CatSession, "hook_parse_failed", fmt.Sprintf("Failed to parse hooks config file: %s", path), err, map[string]any{"path": path})
 		return // bad JSON — silently skip
+	}
+	if cfg.Timeout > 0 {
+		hm.timeout = time.Duration(cfg.Timeout) * time.Second
 	}
 	loadedCount := 0
 	for event, defs := range cfg.Hooks {

@@ -34,6 +34,11 @@ func RenderMarkdown(raw string) string {
 
 // RenderConfirmCard renders the Human-in-the-Loop inline confirmation prompt
 func RenderConfirmCard(prompt string, selectedIndex int) string {
+	return RenderConfirmCardWithDiff(prompt, selectedIndex, false, false)
+}
+
+// RenderConfirmCardWithDiff renders confirmation prompts and appends optional interactive Diff triggers.
+func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, diffActive bool) string {
 	var sb strings.Builder
 
 	// Header
@@ -66,7 +71,16 @@ func RenderConfirmCard(prompt string, selectedIndex int) string {
 	sb.WriteString(aStyle.Render("A 始终允许"))
 
 	sb.WriteString("\n\n")
-	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render("←→ / Tab 选择   Enter 确认   快捷键: Y/N/A"))
+
+	hints := "←→ / Tab 选择   Enter 确认   快捷键: Y/N/A"
+	if hasDiff {
+		if diffActive {
+			hints += "   [D] 收起改动差异 (Hide Diff)"
+		} else {
+			hints += "   [D] 展开改动差异 (Show Diff)"
+		}
+	}
+	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(hints))
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
@@ -243,11 +257,37 @@ func RenderSessionSelectScreen(m Model) string {
 
 		timeStr := sess.LastUpdateTime.Format("2006-01-02 15:04:05")
 
+		tokensStr := "-"
+		costStr := "-"
+		if sess.TotalTokens > 0 {
+			if sess.TotalTokens >= 1000 {
+				tokensStr = fmt.Sprintf("%.1fk", float64(sess.TotalTokens)/1000)
+			} else {
+				tokensStr = fmt.Sprintf("%d", sess.TotalTokens)
+			}
+			if sess.TotalCost > 0 {
+				if sess.TotalCost < 0.01 {
+					costStr = fmt.Sprintf("$%.4f", sess.TotalCost)
+				} else {
+					costStr = fmt.Sprintf("$%.2f", sess.TotalCost)
+				}
+			}
+		}
+
+		statsStr := ""
+		if tokensStr != "-" {
+			if costStr != "-" {
+				statsStr = fmt.Sprintf(" (Tokens: %s, Cost: %s)", tokensStr, costStr)
+			} else {
+				statsStr = fmt.Sprintf(" (Tokens: %s)", tokensStr)
+			}
+		}
+
 		if i+1 == m.SessionListIndex {
 			pointer := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("▶ ")
 			label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render(sess.FirstPrompt)
 			desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render(
-				fmt.Sprintf("ID: %s  更新时间: %s  路径: %s%s", sess.ID, timeStr, sess.CWD, activeTag))
+				fmt.Sprintf("ID: %s  更新时间: %s  路径: %s%s%s", sess.ID, timeStr, sess.CWD, activeTag, statsStr))
 			line = "  " + pointer + label + "\n     " + desc
 		} else {
 			labelStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
@@ -256,7 +296,7 @@ func RenderSessionSelectScreen(m Model) string {
 			}
 			label := labelStyle.Render(sess.FirstPrompt)
 			desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render(
-				fmt.Sprintf("更新时间: %s  路径: %s%s", timeStr, sess.CWD, activeTag))
+				fmt.Sprintf("更新时间: %s  路径: %s%s%s", timeStr, sess.CWD, activeTag, statsStr))
 			line = "     " + label + "\n     " + desc
 		}
 		sb.WriteString(line + "\n\n")
@@ -718,7 +758,11 @@ func RenderToolErrorCard(name string, args any, duration time.Duration, err erro
 	var sb strings.Builder
 	activity := FormatToolActivity(name, args)
 	sb.WriteString(fmt.Sprintf("\x1b[1;31m[fail]\x1b[0m %s  %v\n", activity, duration.Round(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf("       %s", err.Error()))
+	if err != nil {
+		sb.WriteString(fmt.Sprintf("       %s", err.Error()))
+	} else {
+		sb.WriteString("       operation failed")
+	}
 
 	cardStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -924,13 +968,25 @@ func RenderStatusBar(m Model) string {
 		left = fmt.Sprintf("  mode:%s", modeStr)
 	}
 
-	// Right: [mode] + token count
+	// Right: [mode] + token count + cost
 	var tokenStr string
 	if m.TotalTokens > 0 {
+		var tokPart string
 		if m.TotalTokens >= 1000 {
-			tokenStr = fmt.Sprintf("%.1fk", float64(m.TotalTokens)/1000)
+			tokPart = fmt.Sprintf("%.1fk", float64(m.TotalTokens)/1000)
 		} else {
-			tokenStr = fmt.Sprintf("%d", m.TotalTokens)
+			tokPart = fmt.Sprintf("%d", m.TotalTokens)
+		}
+		if m.TotalSessionCost > 0 {
+			var costPart string
+			if m.TotalSessionCost < 0.01 {
+				costPart = fmt.Sprintf("$%.4f", m.TotalSessionCost)
+			} else {
+				costPart = fmt.Sprintf("$%.2f", m.TotalSessionCost)
+			}
+			tokenStr = fmt.Sprintf("%s (%s)", tokPart, costPart)
+		} else {
+			tokenStr = tokPart
 		}
 	} else {
 		tokenStr = "-"
@@ -947,4 +1003,122 @@ func RenderStatusBar(m Model) string {
 
 	barText := left + strings.Repeat(" ", spaces) + right
 	return StyleStatusBar.Render(barText)
+}
+
+// RenderPathCompletionBar renders the bottom path auto-completion suggestion line.
+func RenderPathCompletionBar(items []string, selectedIndex int, width int) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	styleActive := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true)
+	styleNormal := lipgloss.NewStyle().Foreground(ColorTextMuted)
+	stylePrefix := lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true)
+
+	var builder strings.Builder
+	builder.WriteString(stylePrefix.Render("  候选: "))
+
+	var itemStrings []string
+	for i, item := range items {
+		if i == selectedIndex {
+			itemStrings = append(itemStrings, styleActive.Render("▸ "+item))
+		} else {
+			itemStrings = append(itemStrings, styleNormal.Render(item))
+		}
+	}
+
+	// Dynamic truncation to prevent terminal line folding
+	candidatesStr := strings.Join(itemStrings, "   ")
+	totalLen := lipgloss.Width(stylePrefix.Render("  候选: ")) + lipgloss.Width(candidatesStr)
+
+	if totalLen > width && width > 20 {
+		limit := width
+		currentLen := lipgloss.Width(stylePrefix.Render("  候选: "))
+		var truncated []string
+
+		for i, itemStr := range itemStrings {
+			w := lipgloss.Width(itemStr)
+			if currentLen+w > limit {
+				if i > 0 {
+					truncated = append(truncated, styleNormal.Render("..."))
+				}
+				break
+			}
+			truncated = append(truncated, itemStr)
+			currentLen += w + 3 // accounts for spacing "   "
+		}
+		if len(truncated) > 0 {
+			candidatesStr = strings.Join(truncated, "   ")
+		}
+	}
+
+	builder.WriteString(candidatesStr)
+	return builder.String()
+}
+
+// RenderCancelCard renders a premium cancellation card when an operation is aborted
+func RenderCancelCard(duration time.Duration) string {
+	var sb strings.Builder
+	sb.WriteString("⚠️  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("会话已被用户中止 (Generation Aborted)") + "\n\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render(fmt.Sprintf("    • 运行持续时间 :  %s\n", duration.Round(time.Millisecond))))
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("    • 中断完成时间 :  " + time.Now().Format("15:04:05") + "\n"))
+
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorDanger).
+		Padding(0, 1).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
+}
+
+// RenderHelpDashboard renders a gorgeous cheat sheet overlay for keyboard shortcuts and commands
+func RenderHelpDashboard() string {
+	var sb strings.Builder
+
+	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("💡 Iroha Code — 开发者使用指南 & 指令手册") + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n\n")
+
+	// Keyboard Shortcuts section
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" ⌨️  键盘快捷键 (Keyboard Shortcuts)") + "\n")
+
+	shortcuts := []struct {
+		Keys string
+		Desc string
+	}{
+		{"Ctrl + C", "中止当前正在进行的思考与工具调用，或退出空闲状态"},
+		{"Ctrl + D / /exit", "安全保存并退出当前的会话交互"},
+		{"PageUp / PageDown", "在会话内容视窗中向上/向下滚动半页"},
+		{"Esc", "退出会话历史选择器或关闭斜杠指令自动补全补丁"},
+		{"↑ / ↓ (输入框为空时)", "调出或循环您之前输入过的 Prompt 历史命令"},
+		{"/ + 输入指令 (如/doc)", "触发自动指令补全，按 Tab 或 Enter 键选择确认"},
+	}
+
+	for _, s := range shortcuts {
+		sb.WriteString(fmt.Sprintf("    %-18s : %s\n",
+			lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render(s.Keys),
+			lipgloss.NewStyle().Foreground(ColorTextMuted).Render(s.Desc)))
+	}
+	sb.WriteString("\n")
+
+	// Slash Commands section
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" 🚀 斜杠快捷指令 (Slash Commands)") + "\n")
+	for _, cmd := range AllSlashCommands {
+		sb.WriteString(fmt.Sprintf("    %-18s : %s\n",
+			lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(cmd.Command),
+			lipgloss.NewStyle().Foreground(ColorTextMuted).Render(cmd.Description)))
+	}
+
+	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" 🎉 输入提示词指引 Agent 吧！输入 /sessions 切换历史，输入 /doctor 诊断环境。") + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
+
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Padding(0, 1).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return cardStyle.Render(sb.String()) + "\n"
 }

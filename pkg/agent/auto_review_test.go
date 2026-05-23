@@ -285,3 +285,72 @@ func TestHeuristicReview_HardenedRules(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenizeShellCommand(t *testing.T) {
+	tests := []struct {
+		cmd      string
+		expected []string
+	}{
+		{
+			"ls -la",
+			[]string{"ls -la"},
+		},
+		{
+			"echo \"hello; world\" && cat README.md",
+			[]string{"echo \"hello; world\"", "cat README.md"},
+		},
+		{
+			"git status | grep 'modified'",
+			[]string{"git status", "grep 'modified'"},
+		},
+		{
+			"pwd; echo 'done'",
+			[]string{"pwd", "echo 'done'"},
+		},
+		{
+			"echo 'a && b' || echo \"c || d\"",
+			[]string{"echo 'a && b'", "echo \"c || d\""},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.cmd, func(t *testing.T) {
+			got := tokenizeShellCommand(tc.cmd)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected length %d, got %d. Slice: %v", len(tc.expected), len(got), got)
+			}
+			for i := range got {
+				if got[i] != tc.expected[i] {
+					t.Errorf("at index %d: expected %q, got %q", i, tc.expected[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+func TestIsPathDangerous(t *testing.T) {
+	tests := []struct {
+		path      string
+		dangerous bool
+	}{
+		{"pkg/agent/tools.go", false},
+		{"../package.json", true},
+		{"../../etc/passwd", true},
+		{"/bin/sh", false},
+		{"/usr/bin/go", false},
+		{"/tmp/test.log", false},
+		{"/etc/passwd", true},
+		{"/var/log/app.log", true},
+		{"/root/.ssh/id_rsa", true},
+		{"cat /etc/passwd", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			got := isPathDangerous(tc.path)
+			if got != tc.dangerous {
+				t.Errorf("expected isPathDangerous(%q) to be %t, got %t", tc.path, tc.dangerous, got)
+			}
+		})
+	}
+}

@@ -282,12 +282,17 @@ func (mm *MemoryManager) GetDirs() []string {
 // BuildSystemPromptSection returns a Markdown block that can be appended to
 // the system prompt so the LLM has access to all stored durable facts.
 // Returns an empty string if there are no memories.
-func (mm *MemoryManager) BuildSystemPromptSection() string {
+func (mm *MemoryManager) BuildSystemPromptSection(currentPrompt ...string) string {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()
 
 	if len(mm.entries) == 0 {
 		return ""
+	}
+
+	promptText := ""
+	if len(currentPrompt) > 0 {
+		promptText = strings.ToLower(currentPrompt[0])
 	}
 
 	var sb strings.Builder
@@ -304,10 +309,31 @@ func (mm *MemoryManager) BuildSystemPromptSection() string {
 		MemTypeReference: "🔗 External References",
 	}
 
+	injectedCount := 0
 	for _, t := range typeOrder {
 		var typed []*MemoryEntry
 		for _, e := range mm.entries {
-			if e.Type == t {
+			if e.Type != t {
+				continue
+			}
+
+			// Filter logic
+			shouldInject := false
+			if promptText == "" || t == MemTypeFeedback {
+				// Feedback corrections are always injected for safety, or if no prompt is provided
+				shouldInject = true
+			} else {
+				// Fuzzy check keywords in Name, Description, Content
+				keywords := tokenizeKeywords(e.Name + " " + e.Description)
+				for _, kw := range keywords {
+					if strings.Contains(promptText, kw) {
+						shouldInject = true
+						break
+					}
+				}
+			}
+
+			if shouldInject {
 				typed = append(typed, e)
 			}
 		}
@@ -322,9 +348,35 @@ func (mm *MemoryManager) BuildSystemPromptSection() string {
 			}
 			sb.WriteString("\n")
 		}
+		injectedCount += len(typed)
 	}
 
+	if injectedCount == 0 {
+		return ""
+	}
 	return sb.String()
+}
+
+// tokenizeKeywords splits text into lowercase words, skipping short common stop words
+func tokenizeKeywords(text string) []string {
+	text = strings.ToLower(text)
+	// Replace non-alphanumeric with spaces
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	cleaned := re.ReplaceAllString(text, " ")
+	words := strings.Fields(cleaned)
+
+	stopWords := map[string]bool{
+		"the": true, "and": true, "for": true, "you": true, "with": true, "this": true, "that": true,
+		"your": true, "from": true, "have": true, "will": true, "about": true, "want": true,
+	}
+
+	var res []string
+	for _, w := range words {
+		if len(w) >= 3 && !stopWords[w] {
+			res = append(res, w)
+		}
+	}
+	return res
 }
 
 // rebuildIndex rewrites the MEMORY.md index file in the given directory.
