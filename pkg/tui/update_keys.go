@@ -14,7 +14,7 @@ import (
 )
 
 // handleKeyMsg processes key press events depending on TUI state
-func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	var cmd tea.Cmd
 
 	// Log structural or action keypresses to avoid overloading the log
@@ -36,7 +36,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	if msg.Type == tea.KeyCtrlC {
 		if m.State == statePermissionSelect || m.State == stateSessionSelect {
-			return m, tea.Quit
+			return m, tea.Quit, true
 		}
 		if m.State != statePrompt {
 			// Cancel current agent execution
@@ -47,9 +47,9 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 			m.StreamedText += "\n" + RenderCancelCard(elapsed)
 			cmd = m.finalizeTurn()
-			return m, cmd
+			return m, cmd, true
 		}
-		return m, tea.Quit
+		return m, tea.Quit, true
 	}
 
 	// Handle permission select state FIRST
@@ -60,12 +60,12 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			if m.PermSelectIndex > 0 {
 				m.PermSelectIndex--
 			}
-			return m, nil
+			return m, nil, true
 		case tea.KeyDown:
 			if m.PermSelectIndex < len(permModes)-1 {
 				m.PermSelectIndex++
 			}
-			return m, nil
+			return m, nil, true
 		case tea.KeyEnter:
 			_ = agent.GlobalPermissionManager.SetMode(permModes[m.PermSelectIndex])
 			if m.StartInSessionPicker {
@@ -76,11 +76,11 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m = m.transitionTo(statePrompt)
 			}
 			m.Viewport.SetContent(m.renderViewportContent())
-			return m, nil
+			return m, nil, true
 		case tea.KeyCtrlC:
-			return m, tea.Quit
+			return m, tea.Quit, true
 		}
-		return m, nil
+		return m, nil, true
 	}
 
 	// Handle session selection state
@@ -90,16 +90,16 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			if m.SessionListIndex > 0 {
 				m.SessionListIndex--
 			}
-			return m, nil
+			return m, nil, true
 		case tea.KeyDown:
 			if m.SessionListIndex < len(m.SessionsList) {
 				m.SessionListIndex++
 			}
-			return m, nil
+			return m, nil, true
 		case tea.KeyEscape:
 			m = m.transitionTo(m.PrevState)
 			m.Viewport.SetContent(m.renderViewportContent())
-			return m, nil
+			return m, nil, true
 		case tea.KeyEnter:
 			if m.SessionListIndex == 0 {
 				// Start New Session
@@ -116,11 +116,11 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m = m.transitionTo(statePrompt)
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		case tea.KeyCtrlC:
-			return m, tea.Quit
+			return m, tea.Quit, true
 		}
-		return m, nil
+		return m, nil, true
 	}
 
 	// Handle confirmation state FIRST — before any TextArea processing
@@ -131,22 +131,22 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		case tea.KeyRight:
 			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		case tea.KeyTab:
 			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		case tea.KeyShiftTab:
 			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		case tea.KeyEnter:
 			m = m.transitionTo(stateThinking)
 			var resp string
@@ -160,7 +160,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 			agent.Bridge.ResponseChan <- resp
 			m.ConfirmationListenerActive = true
-			return m, m.listenToConfirmationBridge()
+			return m, m.listenToConfirmationBridge(), true
 		}
 
 		switch keyStr {
@@ -173,30 +173,30 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 				} else {
 					m.Viewport.GotoBottom()
 				}
-				return m, nil
+				return m, nil, true
 			}
 		case "y":
 			m = m.transitionTo(stateThinking)
 			agent.Bridge.ResponseChan <- "y"
 			m.ConfirmationListenerActive = true
-			return m, m.listenToConfirmationBridge()
+			return m, m.listenToConfirmationBridge(), true
 		case "n", "esc":
 			m = m.transitionTo(stateThinking)
 			agent.Bridge.ResponseChan <- "n"
 			m.ConfirmationListenerActive = true
-			return m, m.listenToConfirmationBridge()
+			return m, m.listenToConfirmationBridge(), true
 		case "a":
 			m = m.transitionTo(stateThinking)
 			agent.Bridge.ResponseChan <- "always"
 			m.ConfirmationListenerActive = true
-			return m, m.listenToConfirmationBridge()
+			return m, m.listenToConfirmationBridge(), true
 		case "shift+tab":
 			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
-			return m, nil
+			return m, nil, true
 		default:
-			return m, nil
+			return m, nil, true
 		}
 	}
 
@@ -204,22 +204,22 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case tea.KeyPgUp:
 		m.Viewport.HalfPageUp()
-		return m, nil
+		return m, nil, true
 
 	case tea.KeyPgDown:
 		m.Viewport.HalfPageDown()
-		return m, nil
+		return m, nil, true
 
 	case tea.KeyUp:
 		if m.State == statePrompt && m.SlashMenuActive {
 			if m.SlashMenuIndex > 0 {
 				m.SlashMenuIndex--
 			}
-			return m, nil
+			return m, nil, true
 		}
 		if m.State == statePrompt {
 			m.TextArea.SetValue(m.HistoryManager.Up())
-			return m, nil
+			return m, nil, true
 		}
 
 	case tea.KeyDown:
@@ -227,11 +227,11 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 			if m.SlashMenuIndex < len(m.SlashMenuItems)-1 {
 				m.SlashMenuIndex++
 			}
-			return m, nil
+			return m, nil, true
 		}
 		if m.State == statePrompt {
 			m.TextArea.SetValue(m.HistoryManager.Down())
-			return m, nil
+			return m, nil, true
 		}
 
 	case tea.KeyTab:
@@ -242,7 +242,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.SlashMenuActive = false
 				m.SlashMenuItems = nil
 				m.resetPathCompletion()
-				return m, nil
+				return m, nil, true
 			}
 
 			// Handle path auto-completion cycling
@@ -251,7 +251,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 				matched := m.PathCompletionItems[m.PathCompletionIndex]
 				m.TextArea.SetValue(m.PathCompletionRest + matched)
 				m.TextArea.SetCursor(len(m.PathCompletionRest) + len(matched))
-				return m, nil
+				return m, nil, true
 			}
 
 			// Perform initial path scanning
@@ -276,7 +276,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 				m.TextArea.SetValue(rest + matches[0])
 				m.TextArea.SetCursor(len(rest) + len(matches[0]))
-				return m, nil
+				return m, nil, true
 			}
 		}
 
@@ -284,7 +284,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.State == statePrompt && m.SlashMenuActive {
 			m.SlashMenuActive = false
 			m.SlashMenuItems = nil
-			return m, nil
+			return m, nil, true
 		}
 
 	case tea.KeyEnter:
@@ -300,14 +300,14 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 			inputVal := strings.TrimSpace(m.TextArea.Value())
 			if inputVal == "" {
-				return m, nil
+				return m, nil, true
 			}
 
 			// Intercept Slash commands
 			if strings.HasPrefix(inputVal, "/") {
 				newM, slashCmd, handled := m.handleSlashCommand(inputVal)
 				if handled {
-					return newM, slashCmd
+					return newM, slashCmd, true
 				}
 			}
 
@@ -333,11 +333,11 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.OnEvent, m.OnError, m.OnDone,
 			)
 
-			return m, m.Spinner.Tick
+			return m, m.Spinner.Tick, true
 		}
 	}
 
-	return m, nil
+	return m, nil, false
 }
 
 // handleSlashCommand processes commands starting with '/' and returns (updatedModel, command, handled)
