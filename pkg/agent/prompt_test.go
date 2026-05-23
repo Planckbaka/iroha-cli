@@ -232,8 +232,9 @@ func TestPromptBuilderLayeredAGENTSAndSKILLFolder(t *testing.T) {
 		t.Fatalf("failed to write cwd AGENTS: %v", err)
 	}
 
-	// Create a recursive skill folder: subdir/.iroha/skills/my-recursive-skill/SKILL.md
-	skillDir := filepath.Join(subDir, ".iroha", "skills", "my-recursive-skill")
+	// Create a recursive skill folder: tempDir/.iroha/skills/my-recursive-skill/SKILL.md
+	// (at project root so findProjectRoot resolves tempDir, not subDir)
+	skillDir := filepath.Join(tempDir, ".iroha", "skills", "my-recursive-skill")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		t.Fatalf("failed to create recursive skill dir: %v", err)
 	}

@@ -6,3 +6,7 @@ dist/
 .iroha/
 .claude/
 scratch/
+.team/
+.tasks/
+.runtime-tasks/
+.worktrees/
