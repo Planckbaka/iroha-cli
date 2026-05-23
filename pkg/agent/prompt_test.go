@@ -203,3 +203,71 @@ func TestPromptBuilderTeammatesAndWorktrees(t *testing.T) {
 		t.Errorf("expected prompt to contain worktree info, got: %s", promptNormal)
 	}
 }
+
+func TestPromptBuilderLayeredAGENTSAndSKILLFolder(t *testing.T) {
+	// Create a temp workspace directory for testing
+	tempDir, err := os.MkdirTemp("", "iroha-test-agents-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create project-level AGENTS.md
+	projAGENTS := filepath.Join(tempDir, "AGENTS.md")
+	projContent := "Build: go build AGENTS\nTest: go test AGENTS"
+	if err := os.WriteFile(projAGENTS, []byte(projContent), 0644); err != nil {
+		t.Fatalf("failed to write proj AGENTS: %v", err)
+	}
+
+	// Create a sub-directory representing current working directory
+	subDir := filepath.Join(tempDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create sub dir: %v", err)
+	}
+
+	// Create cwd-level AGENTS.md
+	cwdAGENTS := filepath.Join(subDir, "AGENTS.md")
+	cwdContent := "Local rules: only format agents with gofmt"
+	if err := os.WriteFile(cwdAGENTS, []byte(cwdContent), 0644); err != nil {
+		t.Fatalf("failed to write cwd AGENTS: %v", err)
+	}
+
+	// Create a recursive skill folder: subdir/.iroha/skills/my-recursive-skill/SKILL.md
+	skillDir := filepath.Join(subDir, ".iroha", "skills", "my-recursive-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("failed to create recursive skill dir: %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	skillContent := "Recursive skill instruction details."
+	if err := os.WriteFile(skillPath, []byte(skillContent), 0644); err != nil {
+		t.Fatalf("failed to write SKILL.md: %v", err)
+	}
+
+	// Also create a dummy go.mod at the tempDir so findProjectRoot resolves tempDir as project root
+	dummyMod := filepath.Join(tempDir, "go.mod")
+	if err := os.WriteFile(dummyMod, []byte("module test"), 0644); err != nil {
+		t.Fatalf("failed to write dummy go.mod: %v", err)
+	}
+
+	// Initialize builder pointing to the subDir CWD
+	builder := &SystemPromptBuilder{
+		workdir: subDir,
+	}
+
+	prompt := builder.Build()
+
+	// Verify project guideline was read
+	if !strings.Contains(prompt, "AGENTS.md Guidelines") || !strings.Contains(prompt, projContent) {
+		t.Errorf("expected prompt to contain project-level AGENTS.md, got: %s", prompt)
+	}
+
+	// Verify CWD guideline was read
+	if !strings.Contains(prompt, cwdContent) {
+		t.Errorf("expected prompt to contain cwd-level AGENTS.md, got: %s", prompt)
+	}
+
+	// Verify recursive skill SKILL.md was read
+	if !strings.Contains(prompt, "Active Custom Skills") || !strings.Contains(prompt, "my-recursive-skill") || !strings.Contains(prompt, skillContent) {
+		t.Errorf("expected prompt to contain recursive skill SKILL.md, got: %s", prompt)
+	}
+}

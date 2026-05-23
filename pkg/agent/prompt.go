@@ -100,6 +100,12 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("\n")
 	}
 
+	// AGENTS.md Layered Guidelines
+	if agentsSection := b.readAGENTSFiles(); agentsSection != "" {
+		sb.WriteString(agentsSection)
+		sb.WriteString("\n")
+	}
+
 	// Custom Skills Section
 	if skillsSection := b.readSkills(); skillsSection != "" {
 		sb.WriteString(skillsSection)
@@ -113,7 +119,6 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("# Dynamic Context\n")
 	sb.WriteString(fmt.Sprintf("- Current Local Time: %s\n", time.Now().Format("2006-01-02 15:04:05 MST")))
 	sb.WriteString(fmt.Sprintf("- Current Working Directory: %s\n", b.workdir))
-
 	// Security rules and modes
 	mode := GlobalPermissionManager.GetMode()
 	rules := GlobalPermissionManager.GetRules()
@@ -176,6 +181,34 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Respect the layered CLAUDE.md guidelines and persistent memories listed above in the stable section.\n")
 
 	return sb.String()
+}
+
+// getUniqueSkillDirs returns a deduplicated list of directories where custom developer skills live.
+func getUniqueSkillDirs(workdir string) []string {
+	homeDir, err := os.UserHomeDir()
+	var skillDirs []string
+	if err == nil {
+		skillDirs = append(skillDirs, filepath.Join(homeDir, ".iroha", "skills"))
+		skillDirs = append(skillDirs, filepath.Join(homeDir, ".go-claude", "skills"))
+	}
+	projectRoot := findProjectRoot(workdir)
+	skillDirs = append(skillDirs, filepath.Join(projectRoot, ".iroha", "skills"))
+	skillDirs = append(skillDirs, filepath.Join(projectRoot, ".go-claude", "skills"))
+	if workdir != projectRoot {
+		skillDirs = append(skillDirs, filepath.Join(workdir, ".iroha", "skills"))
+		skillDirs = append(skillDirs, filepath.Join(workdir, ".go-claude", "skills"))
+	}
+
+	seen := make(map[string]bool)
+	var uniqueDirs []string
+	for _, dir := range skillDirs {
+		clean := filepath.Clean(dir)
+		if !seen[clean] {
+			seen[clean] = true
+			uniqueDirs = append(uniqueDirs, clean)
+		}
+	}
+	return uniqueDirs
 }
 
 func findProjectRoot(startDir string) string {
@@ -247,32 +280,72 @@ func (b *SystemPromptBuilder) readCLAUDEFiles() string {
 	return "### CLAUDE.md Guidelines\n\n" + sb.String()
 }
 
+func (b *SystemPromptBuilder) readAGENTSFiles() string {
+	var sb strings.Builder
+	var foundAny bool
+
+	// 1. Home Layer
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		paths := []string{
+			filepath.Join(homeDir, ".claude", "AGENTS.md"),
+			filepath.Join(homeDir, ".iroha", "AGENTS.md"),
+			filepath.Join(homeDir, ".go-claude", "AGENTS.md"),
+		}
+		for _, p := range paths {
+			if data, err := os.ReadFile(p); err == nil {
+				sb.WriteString(fmt.Sprintf("#### [User Global Agent Guideline] (%s):\n%s\n\n", p, string(data)))
+				foundAny = true
+				break
+			}
+		}
+	}
+
+	// 2. Traversal from CWD upwards to Project Root
+	projectRoot := findProjectRoot(b.workdir)
+	curr := b.workdir
+	var agentsPaths []string
+	seen := make(map[string]bool)
+
+	for {
+		p := filepath.Join(curr, "AGENTS.md")
+		if _, err := os.Stat(p); err == nil {
+			cleanP := filepath.Clean(p)
+			if !seen[cleanP] {
+				seen[cleanP] = true
+				agentsPaths = append(agentsPaths, p)
+			}
+		}
+		if curr == projectRoot {
+			break
+		}
+		parent := filepath.Dir(curr)
+		if parent == curr {
+			break
+		}
+		curr = parent
+	}
+
+	// Output collected AGENTS.md in order (from CWD up to root)
+	for _, p := range agentsPaths {
+		if data, err := os.ReadFile(p); err == nil {
+			sb.WriteString(fmt.Sprintf("#### [Local Agent Guideline] (%s):\n%s\n\n", p, string(data)))
+			foundAny = true
+		}
+	}
+
+	if !foundAny {
+		return ""
+	}
+
+	return "### AGENTS.md Guidelines\n\n" + sb.String()
+}
+
 func (b *SystemPromptBuilder) readSkills() string {
 	var sb strings.Builder
 	var foundAny bool
 
-	homeDir, err := os.UserHomeDir()
-	var skillDirs []string
-	if err == nil {
-		skillDirs = append(skillDirs, filepath.Join(homeDir, ".iroha", "skills"))
-		skillDirs = append(skillDirs, filepath.Join(homeDir, ".go-claude", "skills"))
-	}
-	projectRoot := findProjectRoot(b.workdir)
-	skillDirs = append(skillDirs, filepath.Join(projectRoot, ".iroha", "skills"))
-	skillDirs = append(skillDirs, filepath.Join(projectRoot, ".go-claude", "skills"))
-	if b.workdir != projectRoot {
-		skillDirs = append(skillDirs, filepath.Join(b.workdir, ".iroha", "skills"))
-		skillDirs = append(skillDirs, filepath.Join(b.workdir, ".go-claude", "skills"))
-	}
-
-	seen := make(map[string]bool)
-	var uniqueDirs []string
-	for _, dir := range skillDirs {
-		if !seen[dir] {
-			seen[dir] = true
-			uniqueDirs = append(uniqueDirs, dir)
-		}
-	}
+	uniqueDirs := getUniqueSkillDirs(b.workdir)
 
 	for _, dir := range uniqueDirs {
 		entries, err := os.ReadDir(dir)
@@ -280,7 +353,22 @@ func (b *SystemPromptBuilder) readSkills() string {
 			continue
 		}
 		for _, de := range entries {
-			if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") {
+			if de.IsDir() {
+				// Search for SKILL.md inside the subdirectory (recursive skills compatibility)
+				skillPath := filepath.Join(dir, de.Name(), "SKILL.md")
+				data, err := os.ReadFile(skillPath)
+				if err == nil {
+					if !foundAny {
+						sb.WriteString("### Active Custom Skills\n\n")
+						foundAny = true
+					}
+					sb.WriteString(fmt.Sprintf("#### Skill Folder: %s\n%s\n\n", de.Name(), string(data)))
+				}
+				continue
+			}
+
+			// Otherwise, handle traditional flat .md skill files
+			if !strings.HasSuffix(de.Name(), ".md") {
 				continue
 			}
 			path := filepath.Join(dir, de.Name())

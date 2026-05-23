@@ -357,6 +357,47 @@ func (r *MCPToolRouter) LoadAndStartPlugins() error {
 		r.clients[name] = client
 	}
 
+	// Scan active skill directories for local skill-level plugins.json
+	uniqueSkillDirs := getUniqueSkillDirs(wd)
+	for _, dir := range uniqueSkillDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, de := range entries {
+			if !de.IsDir() {
+				continue
+			}
+
+			// Try paths like skill_dir/skill_name/plugins.json
+			paths := []string{
+				filepath.Join(dir, de.Name(), "plugins.json"),
+				filepath.Join(dir, de.Name(), ".iroha", "plugins.json"),
+				filepath.Join(dir, de.Name(), ".go-claude", "plugins.json"),
+			}
+			for _, p := range paths {
+				if skillData, err := os.ReadFile(p); err == nil {
+					var skillCfg PluginsConfig
+					if err := json.Unmarshal(skillData, &skillCfg); err == nil {
+						for name, srvConfig := range skillCfg.MCPServers {
+							// Unique name per skill to prevent conflict
+							fullName := fmt.Sprintf("%s__%s", de.Name(), name)
+							if _, ok := r.clients[fullName]; ok {
+								continue // Already started
+							}
+							client := NewMCPClient(fullName, srvConfig)
+							if err := client.Start(); err != nil {
+								continue
+							}
+							r.clients[fullName] = client
+						}
+					}
+					break // break the paths loop if we read one
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

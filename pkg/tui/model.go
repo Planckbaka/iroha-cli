@@ -339,7 +339,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		return m.handleKeyMsg(msg)
+		if newM, keyCmd, handled := m.handleKeyMsg(msg); handled {
+			return newM, keyCmd
+		}
 
 	default:
 		// Attempt to process custom agent events
@@ -395,7 +397,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
-
 
 func (m *Model) finalizeTurn() tea.Cmd {
 	*m = m.transitionTo(statePrompt)

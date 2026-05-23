@@ -114,6 +114,7 @@ main.go (cmd/agent-cli/main.go)
 > 4. **Shell AST 级注入安全防线（已解决）**：在 `auto_review.go` 中原创了状态机 Tokenizer，能够识别引号将连接符打散分部审查；且在 `tools.go` 的 `ShellRun` 与 `BackgroundRun` 中完美注入了沙箱双重绝对防线，硬性拦截 `../` 逃逸和敏感系统目录越界。
 > 5. **核心 Runner 与质量大捷（已解决）**：追加了 TUI 交互、Git 提交和安全阻断的全覆盖测试，且项目完美通过 **golangci-lint 0 issues** 静态大考！
 > 6. **臃肿巨型工具文件拆分解耦（已解决）**：将 1,320+ 行的 monolithic `tools.go` 物理拆分为 9 个按领域划分的高内聚文件（如 `tools_file.go`、`tools_shell.go` 等），极大地提高了代码质量、可读性和协作扩展效率。
+> 7. **臃肿巨型交互文件拆分解耦（已解决）**：将 1,570+ 行的 monolithic `model.go` 物理拆分为 `update_keys.go`（按键与 Slash 命令 Handler）和 `update_msgs.go`（流式特工消息处理器），保持核心模型 TUI 状态周期框架仅 400 行，极大地提高了代码库的清晰度与可扩展性。
 
 ---
 
