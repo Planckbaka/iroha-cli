@@ -7,9 +7,7 @@ import (
 	"time"
 
 	"iroha/pkg/agent"
-	"iroha/pkg/config"
 
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
