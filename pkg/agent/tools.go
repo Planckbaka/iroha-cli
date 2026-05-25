@@ -211,6 +211,33 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	// 7b. memory_search — search memories by query
+	memorySearchTool, err := functiontool.New(functiontool.Config{
+		Name:        "memory_search",
+		Description: "Search persistent memory entries by keyword query (case-insensitive). Returns matching entries sorted by relevance.",
+	}, MemorySearchHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7c. memory_update — update an existing memory entry
+	memoryUpdateTool, err := functiontool.New(functiontool.Config{
+		Name:        "memory_update",
+		Description: "Update an existing persistent memory entry by name. Modifies the description, type, and content fields.",
+	}, MemoryUpdateHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7d. memory_delete — delete a memory entry
+	memoryDeleteTool, err := functiontool.New(functiontool.Config{
+		Name:        "memory_delete",
+		Description: "Delete a persistent memory entry by name. Removes it from disk and the in-memory store.",
+	}, MemoryDeleteHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	// 8. task_create
 	taskCreateTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_create",
@@ -515,7 +542,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	resTools := []tool.Tool{
 		readTool, writeTool, editTool, editBatchTool, listDirTool, grepTool, findTool, shellTool, todoTool,
-		memorySaveTool, memoryListTool,
+		memorySaveTool, memoryListTool, memorySearchTool, memoryUpdateTool, memoryDeleteTool,
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,
 		schCreateTool, schListTool, schDeleteTool,

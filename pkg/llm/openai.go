@@ -276,11 +276,28 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			if attempt > 0 {
+				// Check session retry budget before retrying.
+				if !ConsumeRetry() {
+					if !yield(nil, budgetExhaustedError(g.modelName, lastErr)) {
+						return
+					}
+					return
+				}
+
 				delaySec := 1.0 * math.Pow(2.0, float64(attempt-1))
 				jitter := (rand.Float64() * 0.4) - 0.2
 				delaySec = delaySec + (delaySec * jitter)
-				if delaySec > 10.0 {
-					delaySec = 10.0
+
+				// Override with Retry-After header value if available.
+				// (resp may carry the header from the previous 429 attempt.)
+				if resp != nil {
+					if ra := parseRetryAfter(resp); ra > 0 {
+						delaySec = ra
+					}
+				}
+
+				if delaySec > 60.0 {
+					delaySec = 60.0
 				}
 				if delaySec < 1.0 {
 					delaySec = 1.0

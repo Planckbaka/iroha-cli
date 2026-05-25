@@ -54,3 +54,70 @@ func MemoryListHandler(_ tool.Context, _ MemoryListArgs) (MemoryListResult, erro
 	}
 	return out, nil
 }
+
+// MemorySearchArgs holds the query for searching memories.
+type MemorySearchArgs struct {
+	Query string `json:"query" description:"Search query to find matching memories"`
+}
+
+// MemorySearchResult holds search results.
+type MemorySearchResult struct {
+	Total   int             `json:"total"`
+	Results []MemoryListRow `json:"results"`
+}
+
+func MemorySearchHandler(_ tool.Context, args MemorySearchArgs) (MemorySearchResult, error) {
+	matches := GlobalMemoryManager.Search(args.Query)
+	result := MemorySearchResult{
+		Total:   len(matches),
+		Results: make([]MemoryListRow, 0, len(matches)),
+	}
+	for _, e := range matches {
+		result.Results = append(result.Results, MemoryListRow{
+			Name:        e.Name,
+			Description: e.Description,
+		})
+	}
+	return result, nil
+}
+
+// MemoryUpdateArgs holds arguments for updating a memory entry.
+type MemoryUpdateArgs struct {
+	Name        string `json:"name"        description:"Name of the existing memory entry to update"`
+	Description string `json:"description" description:"Updated one-line summary"`
+	Type        string `json:"type"        description:"Memory type: user, feedback, project, reference"`
+	Content     string `json:"content"     description:"Updated body content"`
+}
+
+// MemoryUpdateResult holds the result of an update operation.
+type MemoryUpdateResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+func MemoryUpdateHandler(_ tool.Context, args MemoryUpdateArgs) (MemoryUpdateResult, error) {
+	err := GlobalMemoryManager.Update(args.Name, args.Description, MemoryType(args.Type), args.Content)
+	if err != nil {
+		return MemoryUpdateResult{OK: false, Message: err.Error()}, nil
+	}
+	return MemoryUpdateResult{OK: true, Message: "Memory updated: " + args.Name}, nil
+}
+
+// MemoryDeleteArgs holds arguments for deleting a memory entry.
+type MemoryDeleteArgs struct {
+	Name string `json:"name" description:"Name of the memory entry to delete"`
+}
+
+// MemoryDeleteResult holds the result of a delete operation.
+type MemoryDeleteResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+func MemoryDeleteHandler(_ tool.Context, args MemoryDeleteArgs) (MemoryDeleteResult, error) {
+	err := GlobalMemoryManager.Delete(args.Name)
+	if err != nil {
+		return MemoryDeleteResult{OK: false, Message: err.Error()}, nil
+	}
+	return MemoryDeleteResult{OK: true, Message: "Memory deleted: " + args.Name}, nil
+}

@@ -188,7 +188,8 @@ func TestPromptBuilderTeammatesAndWorktrees(t *testing.T) {
 	}
 
 	GlobalMessageCount = 5
-	promptNormal := builder.Build()
+	// Use a fresh builder so section hashes don't cache the teammates/worktrees
+	promptNormal := NewSystemPromptBuilder().Build()
 	if strings.Contains(promptNormal, "<identity>") {
 		t.Errorf("did not expect identity tags in prompt under normal message count, got: %s", promptNormal)
 	}

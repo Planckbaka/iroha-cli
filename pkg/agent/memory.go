@@ -449,6 +449,163 @@ func slugify(s string) string {
 	return s
 }
 
+// MaxMemoryEntries caps the total number of stored memory entries.
+const MaxMemoryEntries = 100
+
+// Search returns memory entries matching the query using case-insensitive token matching.
+// Results are sorted by relevance (number of matching tokens, descending).
+func (mm *MemoryManager) Search(query string) []*MemoryEntry {
+	tokens := tokenizeKeywords(query)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+
+	type scored struct {
+		entry *MemoryEntry
+		score int
+	}
+
+	var matches []scored
+	for _, e := range mm.entries {
+		score := 0
+		haystack := strings.ToLower(e.Name + " " + e.Description + " " + e.Content)
+		for _, tok := range tokens {
+			if strings.Contains(haystack, tok) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{entry: e, score: score})
+		}
+	}
+
+	// Sort by relevance (descending score).
+	for i := 0; i < len(matches); i++ {
+		for j := i + 1; j < len(matches); j++ {
+			if matches[j].score > matches[i].score {
+				matches[i], matches[j] = matches[j], matches[i]
+			}
+		}
+	}
+
+	result := make([]*MemoryEntry, len(matches))
+	for i, m := range matches {
+		result[i] = m.entry
+	}
+	return result
+}
+
+// Update modifies an existing memory entry by name. Returns error if not found.
+func (mm *MemoryManager) Update(name, description string, memType MemoryType, content string) error {
+	if !validMemoryTypes[memType] {
+		err := fmt.Errorf("invalid memory type %q: must be one of user, feedback, project, reference", memType)
+		LogError(CatSession, "memory_update_invalid_type", "Attempted to update memory with invalid type", err, map[string]any{"type": memType, "name": name})
+		return err
+	}
+
+	mm.mu.Lock()
+	existing, ok := mm.entries[name]
+	if !ok {
+		mm.mu.Unlock()
+		err := fmt.Errorf("memory entry %q not found", name)
+		LogError(CatSession, "memory_update_not_found", "Attempted to update non-existent memory", err, map[string]any{"name": name})
+		return err
+	}
+	mm.mu.Unlock()
+
+	// Determine which directory the file lives in.
+	saveDir := ""
+	for _, dir := range mm.dirs {
+		testPath := filepath.Join(dir, existing.File)
+		if _, err := os.Stat(testPath); err == nil {
+			saveDir = dir
+			break
+		}
+	}
+	if saveDir == "" {
+		// Fallback: use project memory dir.
+		var err error
+		saveDir, err = projectMemoryDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine memory directory: %w", err)
+		}
+	}
+
+	filename := slugify(name) + ".md"
+	now := time.Now().UTC()
+
+	entry := &MemoryEntry{
+		Name:        name,
+		Description: description,
+		Type:        memType,
+		Content:     content,
+		UpdatedAt:   now,
+		File:        filename,
+	}
+
+	filePath := filepath.Join(saveDir, filename)
+	text := renderFrontmatter(entry)
+	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+		errWrap := fmt.Errorf("cannot write memory file: %w", err)
+		LogError(CatSession, "memory_update_write_failed", fmt.Sprintf("Failed to write updated memory file: %s", filePath), errWrap, map[string]any{"path": filePath, "name": name})
+		return errWrap
+	}
+
+	mm.mu.Lock()
+	mm.entries[name] = entry
+	mm.mu.Unlock()
+
+	mm.rebuildIndex(saveDir)
+
+	LogAudit(CatSession, "memory_update", fmt.Sprintf("Memory entry '%s' (%s) updated successfully", name, memType), map[string]any{
+		"name":        name,
+		"type":        memType,
+		"description": description,
+		"path":        filePath,
+	})
+
+	return nil
+}
+
+// Delete removes a memory entry by name. Returns error if not found.
+func (mm *MemoryManager) Delete(name string) error {
+	mm.mu.Lock()
+	existing, ok := mm.entries[name]
+	if !ok {
+		mm.mu.Unlock()
+		err := fmt.Errorf("memory entry %q not found", name)
+		LogError(CatSession, "memory_delete_not_found", "Attempted to delete non-existent memory", err, map[string]any{"name": name})
+		return err
+	}
+	delete(mm.entries, name)
+	mm.mu.Unlock()
+
+	// Find the directory containing the file and delete it.
+	deletedDir := ""
+	for _, dir := range mm.dirs {
+		filePath := filepath.Join(dir, existing.File)
+		if _, err := os.Stat(filePath); err == nil {
+			_ = os.Remove(filePath)
+			deletedDir = dir
+			break
+		}
+	}
+
+	if deletedDir != "" {
+		mm.rebuildIndex(deletedDir)
+	}
+
+	LogAudit(CatSession, "memory_delete", fmt.Sprintf("Memory entry '%s' deleted", name), map[string]any{
+		"name": name,
+		"file": existing.File,
+	})
+
+	return nil
+}
+
 // projectMemoryDir returns ./.iroha/memory (creating if needed).
 func projectMemoryDir() (string, error) {
 	cwd, err := os.Getwd()

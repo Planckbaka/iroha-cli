@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,7 +34,8 @@ import (
 //	⚠️ [System Reminder]
 //	- short reminder footer
 type SystemPromptBuilder struct {
-	workdir string
+	workdir       string
+	sectionHashes map[string]string
 }
 
 // NewSystemPromptBuilder creates a prompt builder using current working directory.
@@ -43,13 +45,38 @@ func NewSystemPromptBuilder() *SystemPromptBuilder {
 		wd = "."
 	}
 	return &SystemPromptBuilder{
-		workdir: wd,
+		workdir:       wd,
+		sectionHashes: make(map[string]string),
+	}
+}
+
+// hashSection returns the first 16 hex characters of the SHA-256 hash of content.
+func (b *SystemPromptBuilder) hashSection(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", h)[:16]
+}
+
+// MarkStale clears cached hashes for the named sections, forcing re-injection
+// on the next BuildWithPrompt call. Use this when context changes mid-session
+// (e.g., memory update, task status change).
+func (b *SystemPromptBuilder) MarkStale(sections ...string) {
+	for _, s := range sections {
+		delete(b.sectionHashes, s)
 	}
 }
 
 // Build generates the complete system instruction.
 func (b *SystemPromptBuilder) Build() string {
 	return b.BuildWithPrompt("")
+}
+
+// maybeCached returns either the full section content or a cached-marker comment
+// depending on whether the hash has changed since the last call.
+func (b *SystemPromptBuilder) maybeCached(name, content, newHash string) string {
+	if prev, ok := b.sectionHashes[name]; ok && prev == newHash {
+		return fmt.Sprintf("<!-- cached: %s:%s -->\n", name, newHash)
+	}
+	return content
 }
 
 // BuildWithPrompt generates the complete system instruction with trigger matching
@@ -156,20 +183,34 @@ func (b *SystemPromptBuilder) BuildWithPrompt(userPrompt string) string {
 	sb.WriteString("=== DYNAMIC_BOUNDARY ===\n\n")
 
 	// ─── 3. DYNAMIC SUFFIX SECTION ──────────────────────────────────────────
-	sb.WriteString("# Dynamic Context\n")
-	sb.WriteString(fmt.Sprintf("- Current Local Time: %s\n", time.Now().Format("2006-01-02 15:04:05 MST")))
-	sb.WriteString(fmt.Sprintf("- Current Working Directory: %s\n", b.workdir))
-	// Security rules and modes
+	// Build each dynamic section into a local variable, hash it, and only
+	// include the full content when the hash has changed since the last call.
+	// The "time" section is always re-injected because it changes every turn.
+	newHashes := make(map[string]string, 8)
+
+	// --- time (always re-injected) ---
+	timeContent := fmt.Sprintf("# Dynamic Context\n- Current Local Time: %s\n", time.Now().Format("2006-01-02 15:04:05 MST"))
+	newHashes["time"] = b.hashSection(timeContent)
+	sb.WriteString(timeContent)
+
+	// --- workdir ---
+	workdirContent := fmt.Sprintf("- Current Working Directory: %s\n", b.workdir)
+	newHashes["workdir"] = b.hashSection(workdirContent)
+	sb.WriteString(b.maybeCached("workdir", workdirContent, newHashes["workdir"]))
+
+	// --- safety ---
 	mode := GlobalPermissionManager.GetMode()
 	rules := GlobalPermissionManager.GetRules()
 	denials := GlobalPermissionManager.ConsecutiveDenials()
-	sb.WriteString(fmt.Sprintf("- Active Safety Mode: %s\n", mode))
-	sb.WriteString(fmt.Sprintf("- Security Rule Count: %d rules\n", len(rules)))
-	sb.WriteString(fmt.Sprintf("- Consecutive Denials Count: %d\n\n", denials))
+	safetyContent := fmt.Sprintf("- Active Safety Mode: %s\n- Security Rule Count: %d rules\n- Consecutive Denials Count: %d\n\n", mode, len(rules), denials)
+	newHashes["safety"] = b.hashSection(safetyContent)
+	sb.WriteString(b.maybeCached("safety", safetyContent, newHashes["safety"]))
 
-	// Active Tasks in Durable Work Graph
+	// --- tasks ---
+	var tasksContent string
 	if tasks, err := GlobalTaskManager.ListTasks(); err == nil && len(tasks) > 0 {
-		sb.WriteString("# Active Persistent Tasks (Durable Work Graph)\n")
+		var tsb strings.Builder
+		tsb.WriteString("# Active Persistent Tasks (Durable Work Graph)\n")
 		for _, t := range tasks {
 			statusMarker := "[ ]"
 			if t.Status == "in_progress" {
@@ -182,43 +223,71 @@ func (b *SystemPromptBuilder) BuildWithPrompt(userPrompt string) string {
 			if len(t.BlockedBy) > 0 {
 				depStr = fmt.Sprintf(" (blocked by: %s)", strings.Join(t.BlockedBy, ", "))
 			}
-			sb.WriteString(fmt.Sprintf("  %s %s - %s (owner: %s)%s\n", statusMarker, t.ID, t.Subject, t.Owner, depStr))
+			tsb.WriteString(fmt.Sprintf("  %s %s - %s (owner: %s)%s\n", statusMarker, t.ID, t.Subject, t.Owner, depStr))
 		}
-		sb.WriteString("\n")
+		tsb.WriteString("\n")
+		tasksContent = tsb.String()
+	}
+	newHashes["tasks"] = b.hashSection(tasksContent)
+	if tasksContent != "" {
+		sb.WriteString(b.maybeCached("tasks", tasksContent, newHashes["tasks"]))
 	}
 
-	// Active Teammates
+	// --- teammates ---
+	var teammatesContent string
 	if teammates, err := GlobalTeamManager.ListTeammates(); err == nil && len(teammates) > 0 {
-		sb.WriteString("# Active Team Roster\n")
+		var msb strings.Builder
+		msb.WriteString("# Active Team Roster\n")
 		for _, t := range teammates {
-			sb.WriteString(fmt.Sprintf("  - %s (%s) - status: %s, last active: %s\n", t.Name, t.Role, t.Status, t.LastActive.Format("15:04:05")))
+			msb.WriteString(fmt.Sprintf("  - %s (%s) - status: %s, last active: %s\n", t.Name, t.Role, t.Status, t.LastActive.Format("15:04:05")))
 		}
-		sb.WriteString("\n")
+		msb.WriteString("\n")
+		teammatesContent = msb.String()
+	}
+	newHashes["teammates"] = b.hashSection(teammatesContent)
+	if teammatesContent != "" {
+		sb.WriteString(b.maybeCached("teammates", teammatesContent, newHashes["teammates"]))
 	}
 
-	// Inbox Alerts for main agent
+	// --- inbox ---
+	var inboxContent string
 	if msgs, err := GlobalTeamManager.PeekInbox("user-dev"); err == nil && len(msgs) > 0 {
-		sb.WriteString("# 📬 Inbox Alerts (Unread Messages)\n")
+		var isb strings.Builder
+		isb.WriteString("# ð¬ Inbox Alerts (Unread Messages)\n")
 		for i, msg := range msgs {
-			sb.WriteString(fmt.Sprintf("  %d. From [%s] at %s:\n      %s\n", i+1, msg.Sender, time.Unix(int64(msg.Timestamp), 0).Format("15:04:05"), msg.Content))
+			isb.WriteString(fmt.Sprintf("  %d. From [%s] at %s:\n      %s\n", i+1, msg.Sender, time.Unix(int64(msg.Timestamp), 0).Format("15:04:05"), msg.Content))
 		}
-		sb.WriteString("  (Use the `read_inbox` tool to mark these as read and clear your inbox)\n\n")
+		isb.WriteString("  (Use the `read_inbox` tool to mark these as read and clear your inbox)\n\n")
+		inboxContent = isb.String()
+	}
+	newHashes["inbox"] = b.hashSection(inboxContent)
+	if inboxContent != "" {
+		sb.WriteString(b.maybeCached("inbox", inboxContent, newHashes["inbox"]))
 	}
 
-	// Active Worktrees
+	// --- worktrees ---
+	var worktreesContent string
 	if worktrees, err := GlobalWorktreeManager.List(); err == nil && len(worktrees) > 0 {
-		sb.WriteString("# Active Worktree Branches\n")
+		var wsb strings.Builder
+		wsb.WriteString("# Active Worktree Branches\n")
 		for _, w := range worktrees {
-			sb.WriteString(fmt.Sprintf("  - %s (branch: %s) - task: %s, status: %s, path: %s\n", w.Name, w.Branch, w.TaskID, w.Status, w.Path))
+			wsb.WriteString(fmt.Sprintf("  - %s (branch: %s) - task: %s, status: %s, path: %s\n", w.Name, w.Branch, w.TaskID, w.Status, w.Path))
 		}
-		sb.WriteString("\n")
+		wsb.WriteString("\n")
+		worktreesContent = wsb.String()
+	}
+	newHashes["worktrees"] = b.hashSection(worktreesContent)
+	if worktreesContent != "" {
+		sb.WriteString(b.maybeCached("worktrees", worktreesContent, newHashes["worktrees"]))
 	}
 
-	// System Reminder
-	sb.WriteString("⚠️ [System Reminder]\n")
-	sb.WriteString("- Remember to use the `todo` tool to manage your progress on multi-step tasks. Ensure only one task is in_progress at any time.\n")
-	sb.WriteString("- For sensitive operations (like running shell commands or modifying files), invoke the proper tools and explain your parameters before execution.\n")
-	sb.WriteString("- Respect the layered CLAUDE.md guidelines and persistent memories listed above in the stable section.\n")
+	// --- reminder ---
+	reminderContent := "⚠️ [System Reminder]\n- Remember to use the `todo` tool to manage your progress on multi-step tasks. Ensure only one task is in_progress at any time.\n- For sensitive operations (like running shell commands or modifying files), invoke the proper tools and explain your parameters before execution.\n- Respect the layered CLAUDE.md guidelines and persistent memories listed above in the stable section.\n"
+	newHashes["reminder"] = b.hashSection(reminderContent)
+	sb.WriteString(b.maybeCached("reminder", reminderContent, newHashes["reminder"]))
+
+	// Update stored hashes for the next turn
+	b.sectionHashes = newHashes
 
 	return sb.String()
 }

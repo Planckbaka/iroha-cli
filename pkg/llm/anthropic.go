@@ -252,7 +252,21 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			if attempt > 0 {
+				// Check session retry budget before retrying.
+				if !ConsumeRetry() {
+					yield(nil, budgetExhaustedError(a.modelName, lastErr))
+					return
+				}
+
 				delay := time.Duration(1<<uint(attempt-1)) * time.Second
+
+				// Override with Retry-After header value if available.
+				if resp != nil {
+					if raSec := parseRetryAfter(resp); raSec > 0 {
+						delay = time.Duration(raSec * float64(time.Second))
+					}
+				}
+
 				select {
 				case <-ctx.Done():
 					yield(nil, ctx.Err())

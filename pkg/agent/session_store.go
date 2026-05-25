@@ -15,6 +15,16 @@ import (
 )
 
 // SerializedSession represents the full schema serialized to disk for a session.
+//
+// Event serialization preserves all session.Event fields including:
+//   - Content.Parts[].Text (user/assistant text messages)
+//   - Content.Parts[].FunctionCall (tool invocations: name + args)
+//   - Content.Parts[].FunctionResponse (tool results: name + response map)
+//   - LLMResponse.UsageMetadata (token usage per turn)
+//   - Author, Branch, InvocationID, Timestamp, Actions
+//
+// These are embedded via model.LLMResponse and *genai.Content, which are fully
+// JSON-serializable by json.MarshalIndent.
 type SerializedSession struct {
 	ID             string           `json:"id"`
 	AppName        string           `json:"app_name"`
@@ -24,6 +34,12 @@ type SerializedSession struct {
 	Events         []*session.Event `json:"events"`
 	CWD            string           `json:"cwd"`
 	FirstPrompt    string           `json:"first_prompt"`
+
+	// Phase 4.4: Conversation persistence and resumability fields.
+	PermissionMode        string  `json:"permission_mode,omitempty"`
+	TotalTokens           int     `json:"total_tokens,omitempty"`
+	TotalCost             float64 `json:"total_cost,omitempty"`
+	CompactionArchivePath string  `json:"compaction_archive_path,omitempty"`
 }
 
 // SessionMetadata represents the key metadata of a saved session, used for TUI picker.
@@ -143,15 +159,63 @@ func (s *PersistentSessionService) SaveSession(ctx context.Context, sess session
 	// Get current working directory
 	cwd, _ := os.Getwd()
 
+	// Phase 4.4: Populate persistence fields.
+
+	// Permission mode: read from the global permission manager.
+	permissionMode := string(GlobalPermissionManager.GetMode())
+
+	// Token/cost estimation: sum text length across events and compute rough totals.
+	// If a previous TotalTokens was stored in state map, prefer that.
+	totalTokens := 0
+	if stored, ok := stateMap["total_tokens"]; ok {
+		if n, ok := stored.(float64); ok {
+			totalTokens = int(n)
+		}
+	}
+	if totalTokens == 0 {
+		totalTextLen := 0
+		for _, ev := range events {
+			if ev == nil {
+				continue
+			}
+			if ev.Content != nil {
+				for _, part := range ev.Content.Parts {
+					totalTextLen += len(part.Text)
+				}
+			}
+			if ev.LLMResponse.Content != nil {
+				for _, part := range ev.LLMResponse.Content.Parts {
+					totalTextLen += len(part.Text)
+				}
+			}
+		}
+		totalTokens = totalTextLen / 4
+	}
+	totalCost := float64(totalTokens) * 2.0 / 1000000.0
+
+	// Compaction archive path: check if transcript archive exists for this session.
+	var compactionArchivePath string
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		candidatePath := filepath.Join(homeDir, ".iroha", "transcripts", sess.ID()+".jsonl")
+		if _, err := os.Stat(candidatePath); err == nil {
+			compactionArchivePath = candidatePath
+		}
+	}
+
 	serialized := SerializedSession{
-		ID:             sess.ID(),
-		AppName:        sess.AppName(),
-		UserID:         sess.UserID(),
-		LastUpdateTime: sess.LastUpdateTime(),
-		State:          stateMap,
-		Events:         events,
-		CWD:            cwd,
-		FirstPrompt:    firstPrompt,
+		ID:                    sess.ID(),
+		AppName:               sess.AppName(),
+		UserID:                sess.UserID(),
+		LastUpdateTime:        sess.LastUpdateTime(),
+		State:                 stateMap,
+		Events:                events,
+		CWD:                   cwd,
+		FirstPrompt:           firstPrompt,
+		PermissionMode:        permissionMode,
+		TotalTokens:           totalTokens,
+		TotalCost:             totalCost,
+		CompactionArchivePath: compactionArchivePath,
 	}
 
 	data, err := json.MarshalIndent(serialized, "", "  ")
@@ -206,6 +270,15 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 		if err := json.Unmarshal(data, &serialized); err != nil {
 			LogError(CatSession, "session_unmarshal_failed", fmt.Sprintf("Failed to unmarshal session file: %s", filePath), err, map[string]any{"path": filePath})
 			continue
+		}
+
+		// Validate session before hydration
+		warnings := serialized.ValidateResume()
+		if len(warnings) > 0 {
+			LogWarn(CatSession, "session_resume_warnings", fmt.Sprintf("Session '%s' has resume warnings: %s", serialized.ID, strings.Join(warnings, "; ")), map[string]any{
+				"session_id": serialized.ID,
+				"warnings":   warnings,
+			})
 		}
 
 		// Recreate the session in delegate
@@ -269,24 +342,29 @@ func (s *PersistentSessionService) ListSavedSessions() ([]SessionMetadata, error
 			firstPrompt = getFirstPrompt(serialized.Events)
 		}
 
-		totalTextLen := 0
-		for _, ev := range serialized.Events {
-			if ev == nil {
-				continue
-			}
-			if ev.Content != nil {
-				for _, part := range ev.Content.Parts {
-					totalTextLen += len(part.Text)
+		// Use persisted totals if available (Phase 4.4), otherwise estimate from text length.
+		totalTokens := serialized.TotalTokens
+		totalCost := serialized.TotalCost
+		if totalTokens == 0 {
+			totalTextLen := 0
+			for _, ev := range serialized.Events {
+				if ev == nil {
+					continue
+				}
+				if ev.Content != nil {
+					for _, part := range ev.Content.Parts {
+						totalTextLen += len(part.Text)
+					}
+				}
+				if ev.LLMResponse.Content != nil {
+					for _, part := range ev.LLMResponse.Content.Parts {
+						totalTextLen += len(part.Text)
+					}
 				}
 			}
-			if ev.LLMResponse.Content != nil {
-				for _, part := range ev.LLMResponse.Content.Parts {
-					totalTextLen += len(part.Text)
-				}
-			}
+			totalTokens = totalTextLen / 4
+			totalCost = float64(totalTokens) * 2.0 / 1000000.0 // Baseline estimate: $2.00 per million tokens
 		}
-		totalTokens := totalTextLen / 4
-		totalCost := float64(totalTokens) * 2.0 / 1000000.0 // Baseline estimate: $2.00 per million tokens
 
 		metaList = append(metaList, SessionMetadata{
 			ID:             serialized.ID,
@@ -427,6 +505,28 @@ func CleanOldSessions(sessionsDir string, maxAge time.Duration) int {
 		}
 	}
 	return count
+}
+
+// ValidateResume checks session integrity and returns warnings for any issues found.
+func (s *SerializedSession) ValidateResume() []string {
+	var warnings []string
+	if len(s.Events) == 0 {
+		warnings = append(warnings, "session has no events")
+	}
+	if s.CWD == "" {
+		warnings = append(warnings, "session has no CWD recorded")
+	} else if _, err := os.Stat(s.CWD); os.IsNotExist(err) {
+		warnings = append(warnings, fmt.Sprintf("session CWD no longer exists: %s", s.CWD))
+	}
+	if s.State == nil {
+		warnings = append(warnings, "session has no state map")
+	}
+	if s.CompactionArchivePath != "" {
+		if _, err := os.Stat(s.CompactionArchivePath); os.IsNotExist(err) {
+			warnings = append(warnings, "compaction archive no longer exists: "+s.CompactionArchivePath)
+		}
+	}
+	return warnings
 }
 
 // Ensure interface matching
