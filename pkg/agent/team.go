@@ -22,6 +22,7 @@ type TeamMessage struct {
 type Teammate struct {
 	Name         string    `json:"name"`
 	Role         string    `json:"role"`
+	Type         string    `json:"type,omitempty"` // "explore", "planner", "reviewer", "executor", "researcher"
 	SystemPrompt string    `json:"system_prompt"`
 	Status       string    `json:"status"` // "idle", "working", "offline"
 	LastActive   time.Time `json:"last_active"`
@@ -123,7 +124,7 @@ func (tm *TeamManager) SaveConfig() error {
 }
 
 // RegisterTeammate creates or updates a specialist and saves it.
-func (tm *TeamManager) RegisterTeammate(name, role, systemPrompt string) (*Teammate, error) {
+func (tm *TeamManager) RegisterTeammate(name, role, systemPrompt, agentType string) (*Teammate, error) {
 	if name == "" || role == "" {
 		return nil, fmt.Errorf("name and role are required")
 	}
@@ -141,6 +142,7 @@ func (tm *TeamManager) RegisterTeammate(name, role, systemPrompt string) (*Teamm
 		tm.teammates[name] = t
 	}
 	t.Role = role
+	t.Type = agentType
 	t.SystemPrompt = systemPrompt
 	t.Status = "idle"
 	t.LastActive = time.Now()

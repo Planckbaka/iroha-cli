@@ -112,6 +112,9 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			// s19: MCP & Plugin
 			{Tool: "mcp_server_list", Behavior: "allow"},
 			{Tool: "mcp__*", Behavior: "ask"},
+			// s22: Web Tools
+			{Tool: "web_fetch", Behavior: "allow"},
+			{Tool: "web_search", Behavior: "allow"},
 		},
 	}
 }

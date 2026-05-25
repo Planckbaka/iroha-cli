@@ -398,6 +398,27 @@ func (r *MCPToolRouter) LoadAndStartPlugins() error {
 		}
 	}
 
+	// Load plugin manifests from plugin directories and merge their MCP servers
+	if err := GlobalPluginManager.LoadPlugins(); err == nil {
+		pluginServers := GlobalPluginManager.MergeMCPServers()
+		for name, srvConfig := range pluginServers {
+			if _, ok := r.clients[name]; ok {
+				continue
+			}
+			client := NewMCPClient(name, srvConfig)
+			if err := client.Start(); err != nil {
+				continue
+			}
+			r.clients[name] = client
+		}
+
+		// Merge plugin hooks into the global hook manager
+		pluginHooks := GlobalPluginManager.MergeHooks()
+		if len(pluginHooks) > 0 {
+			GlobalHookManager.mergePluginHooks(pluginHooks)
+		}
+	}
+
 	return nil
 }
 

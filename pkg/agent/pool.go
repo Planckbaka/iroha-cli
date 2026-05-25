@@ -41,6 +41,55 @@ var GlobalAgentPool = &AgentPool{
 	runners: make(map[string]*runner.Runner),
 }
 
+// typePromptTemplates provides per-type system prompt prefixes for typed subagents.
+var typePromptTemplates = map[string]string{
+	"explore":    "You are an exploration agent. You can only read files and search. Report findings concisely.\n\n",
+	"planner":    "You are a planning agent. You can only read files and search. Create detailed implementation plans.\n\n",
+	"reviewer":   "You are a code review agent. You can only read files and search. Review code for bugs, style, and quality.\n\n",
+	"executor":   "You are an execution agent with full capabilities. Implement changes according to instructions.\n\n",
+	"researcher": "You are a research agent. You can read files and search. Gather and synthesize information.\n\n",
+}
+
+// allowedToolsByType defines which tool names each agent type can access.
+var allowedToolsByType = map[string]map[string]bool{
+	"explore":    {"file_read": true, "list_directory": true, "search_grep": true, "find_files": true},
+	"planner":    {"file_read": true, "list_directory": true, "search_grep": true, "find_files": true},
+	"reviewer":   {"file_read": true, "search_grep": true, "find_files": true},
+	"researcher": {"file_read": true, "list_directory": true, "search_grep": true, "find_files": true},
+}
+
+// GetToolsForType returns a curated set of tools based on the agent type.
+// Empty or unknown types return the full tool set for backward compatibility.
+func GetToolsForType(typeName string) ([]tool.Tool, error) {
+	allTools, err := GetSWETools()
+	if err != nil {
+		return nil, err
+	}
+
+	allowed, ok := allowedToolsByType[typeName]
+	if !ok {
+		// executor, empty, or unknown: return all tools
+		return allTools, nil
+	}
+
+	filtered := make([]tool.Tool, 0, len(allowed))
+	for _, t := range allTools {
+		if allowed[t.Name()] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered, nil
+}
+
+// TypePromptPrefix returns the system prompt prefix for a given agent type.
+// Returns empty string for unknown types.
+func TypePromptPrefix(typeName string) string {
+	if prefix, ok := typePromptTemplates[typeName]; ok {
+		return prefix
+	}
+	return ""
+}
+
 func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string, error) {
 	ap.mu.Lock()
 	subRunner, exists := ap.runners[teammate.Name]
@@ -54,8 +103,8 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		}
 
 		// 2. Setup subagent ADK Runner
-		// Retrieve SWE tools
-		tools, err := GetSWETools()
+		// Retrieve curated tools based on agent type
+		tools, err := GetToolsForType(teammate.Type)
 		if err != nil {
 			return "", err
 		}
@@ -64,6 +113,9 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		for _, t := range tools {
 			wrappedTools = append(wrappedTools, &blockingConfirmationTool{Tool: t})
 		}
+
+		// Build system prompt with type-specific prefix
+		systemPrompt := TypePromptPrefix(teammate.Type) + teammate.SystemPrompt
 
 		// Setup subagent model adapter with subagent system prompt
 		ap.mu.RLock()
@@ -76,14 +128,14 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		ap.mu.RUnlock()
 
 		// Retrieve or build subagent adapter
-		subAdapter, err := llm.NewAdapter(genkitReg, prov, mod, key, base, teammate.SystemPrompt, fmtFormat, runnerHooks{})
+		subAdapter, err := llm.NewAdapter(genkitReg, prov, mod, key, base, systemPrompt, fmtFormat, runnerHooks{})
 		if err != nil {
 			return "", err
 		}
 
 		subAgent, err := llmagent.New(llmagent.Config{
 			Name:        teammate.Name,
-			Instruction: teammate.SystemPrompt,
+			Instruction: systemPrompt,
 			Model:       subAdapter,
 			Tools:       wrappedTools,
 		})

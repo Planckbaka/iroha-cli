@@ -10,6 +10,7 @@ import (
 type SpawnTeammateArgs struct {
 	Name         string `json:"name" description:"Unique teammate agent name"`
 	Role         string `json:"role" description:"Role assignment, e.g. database, frontend"`
+	AgentType    string `json:"agent_type" description:"Agent type: explore, planner, reviewer, executor, researcher"`
 	SystemPrompt string `json:"system_prompt" description:"System instructions"`
 }
 
@@ -19,7 +20,7 @@ type SpawnTeammateResult struct {
 }
 
 func SpawnTeammateHandler(ctx tool.Context, args SpawnTeammateArgs) (SpawnTeammateResult, error) {
-	_, err := GlobalTeamManager.RegisterTeammate(args.Name, args.Role, args.SystemPrompt)
+	_, err := GlobalTeamManager.RegisterTeammate(args.Name, args.Role, args.SystemPrompt, args.AgentType)
 	if err != nil {
 		return SpawnTeammateResult{Success: false}, WrapToolError("spawn_teammate", args, err)
 	}

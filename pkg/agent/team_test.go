@@ -20,7 +20,7 @@ func TestTeamManager_RegisterAndLoad(t *testing.T) {
 	}
 	_ = os.MkdirAll(filepath.Join(tempDir, "inbox"), 0755)
 
-	tmate, err := tm.RegisterTeammate("architect", "Software Architect", "Define codebase structures.")
+	tmate, err := tm.RegisterTeammate("architect", "Software Architect", "Define codebase structures.", "planner")
 	if err != nil {
 		t.Fatalf("RegisterTeammate failed: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestTeamManager_BackgroundWorkerLoop(t *testing.T) {
 	}
 	_ = os.MkdirAll(filepath.Join(tempDir, "inbox"), 0755)
 
-	_, _ = tm.RegisterTeammate("worker-bob", "Developer", "Write code.")
+	_, _ = tm.RegisterTeammate("worker-bob", "Developer", "Write code.", "executor")
 
 	processed := make(chan TeamMessage, 1)
 	tm.ProcessMessage = func(teammate *Teammate, msg TeamMessage) (string, error) {
@@ -182,8 +182,8 @@ func TestTeamManager_BroadcastAndList(t *testing.T) {
 	}
 	_ = os.MkdirAll(filepath.Join(tempDir, "inbox"), 0755)
 
-	_, _ = tm.RegisterTeammate("bob", "Dev", "")
-	_, _ = tm.RegisterTeammate("alice", "QA", "")
+	_, _ = tm.RegisterTeammate("bob", "Dev", "", "")
+	_, _ = tm.RegisterTeammate("alice", "QA", "", "")
 
 	list, err := tm.ListTeammates()
 	if err != nil {

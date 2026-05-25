@@ -188,6 +188,15 @@ func (hm *HookManager) loadFile(path string) {
 	})
 }
 
+// mergePluginHooks appends hook definitions from plugin manifests.
+func (hm *HookManager) mergePluginHooks(hooks map[string][]HookDef) {
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+	for event, defs := range hooks {
+		hm.hooks[event] = append(hm.hooks[event], defs...)
+	}
+}
+
 // GetSources returns the config paths that were successfully loaded.
 func (hm *HookManager) GetSources() []string {
 	hm.mu.RLock()

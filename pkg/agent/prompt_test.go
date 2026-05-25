@@ -155,7 +155,7 @@ func TestPromptBuilderSkills(t *testing.T) {
 
 func TestPromptBuilderTeammatesAndWorktrees(t *testing.T) {
 	// 1. Setup mock teammate
-	_, err := GlobalTeamManager.RegisterTeammate("PromptSpecialist", "Reviewing prompts", "Custom sys prompt")
+	_, err := GlobalTeamManager.RegisterTeammate("PromptSpecialist", "Reviewing prompts", "Custom sys prompt", "executor")
 	if err != nil {
 		t.Fatalf("failed to register teammate: %v", err)
 	}

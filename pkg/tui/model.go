@@ -112,6 +112,7 @@ var AllSlashCommands = []SlashMenuItem{
 	{"/worktree", "View Git Worktree isolation status"},
 	{"/mcp", "View MCP plugin status"},
 	{"/bg", "View background task status"},
+	{"/skill", "Invoke a registered skill by name (e.g. /skill tdd-workflow)"},
 	{"/trace", "View tool call trace log for the current session"},
 	{"/sessions", "View and switch session history"},
 	{"/resume", "Resume the most recent session and continue the conversation"},

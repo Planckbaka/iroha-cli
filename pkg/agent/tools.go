@@ -442,6 +442,23 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	// s22 Web Tools
+	webFetchTool, err := functiontool.New(functiontool.Config{
+		Name:        "web_fetch",
+		Description: "Fetch a web page by URL and return its content as text. Only HTTP/HTTPS is supported. Private IP ranges are blocked for security. Response body limited to 1MB.",
+	}, WebFetchHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	webSearchTool, err := functiontool.New(functiontool.Config{
+		Name:        "web_search",
+		Description: "Search the web using DuckDuckGo (default) or a configured SearXNG backend. Returns structured results with title, URL, and snippet.",
+	}, WebSearchHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	// s21 LSP Tools — load user LSP server config if available
 	if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
 		servers := make([]LSPServerConfig, len(cfg.LSPServers))
@@ -517,6 +534,8 @@ func GetSWETools() ([]tool.Tool, error) {
 		ciWatchTool,
 		// s21
 		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool, lspHoverTool, lspDiagTool,
+		// s22
+		webFetchTool, webSearchTool,
 	}
 
 	// s19 Dynamic MCP Tools

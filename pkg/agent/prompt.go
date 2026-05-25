@@ -49,6 +49,12 @@ func NewSystemPromptBuilder() *SystemPromptBuilder {
 
 // Build generates the complete system instruction.
 func (b *SystemPromptBuilder) Build() string {
+	return b.BuildWithPrompt("")
+}
+
+// BuildWithPrompt generates the complete system instruction with trigger matching
+// against the given user prompt. Pass empty string to skip trigger matching.
+func (b *SystemPromptBuilder) BuildWithPrompt(userPrompt string) string {
 	var sb strings.Builder
 
 	// Prepend <identity> block if GlobalMessageCount < 3
@@ -110,6 +116,40 @@ func (b *SystemPromptBuilder) Build() string {
 	if skillsSection := b.readSkills(); skillsSection != "" {
 		sb.WriteString(skillsSection)
 		sb.WriteString("\n")
+	}
+
+	// Manifest-based Skills: always-on skills from skill.json manifests
+	if alwaysSkills := GlobalSkillManager.GetAlwaysSkills(); len(alwaysSkills) > 0 {
+		var skillSB strings.Builder
+		skillSB.WriteString("### Active Manifest Skills (Always-On)\n\n")
+		for _, s := range alwaysSkills {
+			instructions, err := LoadInstructions(s)
+			if err != nil {
+				continue
+			}
+			skillSB.WriteString(fmt.Sprintf("#### Skill: %s (%s)\n%s\n\n", s.Name, s.ID, instructions))
+		}
+		if skillSB.Len() > 0 {
+			sb.WriteString(skillSB.String())
+		}
+	}
+
+	// Manifest-based Skills: trigger-matched skills for the current prompt
+	if userPrompt != "" {
+		if matchedSkills := GlobalSkillManager.MatchTriggers(userPrompt); len(matchedSkills) > 0 {
+			var skillSB strings.Builder
+			skillSB.WriteString("### Triggered Skills\n\n")
+			for _, s := range matchedSkills {
+				instructions, err := LoadInstructions(s)
+				if err != nil {
+					continue
+				}
+				skillSB.WriteString(fmt.Sprintf("#### Skill: %s (%s)\n%s\n\n", s.Name, s.ID, instructions))
+			}
+			if skillSB.Len() > 0 {
+				sb.WriteString(skillSB.String())
+			}
+		}
 	}
 
 	// ─── 2. PROMPT CACHING BOUNDARY ─────────────────────────────────────────

@@ -52,6 +52,9 @@ type Config struct {
 	BaseURL    string            `json:"base_url,omitempty"`
 	APIFormat  string            `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
 	LSPServers []LSPServerConfig `json:"lsp_servers,omitempty"`
+
+	// Web search configuration
+	WebSearchSearXNGURL string `json:"web_search.searxng_url,omitempty"`
 }
 
 // GetConfigPath returns the absolute path to user configuration file (~/.iroha.json)
