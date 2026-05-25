@@ -218,7 +218,7 @@ func WebFetchHandler(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error
 	if err != nil {
 		return WebFetchResult{}, WrapToolError("web_fetch", args, fmt.Errorf("HTTP request failed: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return WebFetchResult{}, fmt.Errorf("web_fetch: HTTP %d %s", resp.StatusCode, resp.Status)
@@ -316,7 +316,7 @@ func duckduckgoSearch(query string, count int) (WebSearchResult, error) {
 	if err != nil {
 		return WebSearchResult{}, WrapToolError("web_search", WebSearchArgs{Query: query}, fmt.Errorf("DuckDuckGo request failed: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return WebSearchResult{}, fmt.Errorf("web_search: DuckDuckGo returned HTTP %d", resp.StatusCode)
@@ -428,7 +428,7 @@ func searxngSearch(searxngURL, query string, count int) (WebSearchResult, error)
 	if err != nil {
 		return WebSearchResult{}, WrapToolError("web_search", WebSearchArgs{Query: query}, fmt.Errorf("SearXNG request failed: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return WebSearchResult{}, fmt.Errorf("web_search: SearXNG returned HTTP %d", resp.StatusCode)
