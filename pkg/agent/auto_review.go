@@ -179,6 +179,7 @@ func ClassifyTool(toolName string, args any) (RiskTier, string) {
 
 	case "todo", "task_create", "task_update", "task_list", "task_get",
 		"check_background", "schedule_create", "schedule_list", "schedule_delete",
+		"subagent_run",
 		// Teams
 		"spawn_teammate", "list_teammates", "send_message", "read_inbox", "broadcast",
 		// Protocols

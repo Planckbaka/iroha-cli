@@ -6,6 +6,7 @@ import (
 
 	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // ProviderType represents the LLM provider
@@ -33,6 +34,7 @@ const (
 type AdapterHooks interface {
 	NagReminder() string
 	NoteRound()
+	CompactHistory(contents []*genai.Content) []*genai.Content
 }
 
 // TokenTracker tracks cumulative token usage across adapter calls.

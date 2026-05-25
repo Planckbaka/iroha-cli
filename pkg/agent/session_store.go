@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 // SerializedSession represents the full schema serialized to disk for a session.
@@ -564,3 +566,100 @@ func (s *SerializedSession) ValidateResume() []string {
 
 // Ensure interface matching
 var _ session.Service = (*PersistentSessionService)(nil)
+
+// CompactActiveSession compacts the history events of the active session.
+func (s *PersistentSessionService) CompactActiveSession(ctx context.Context, sessionID string, llm ...model.LLM) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Retrieve session from memory delegate
+	getResp, err := s.delegate.Get(ctx, &session.GetRequest{SessionID: sessionID})
+	if err != nil {
+		return err
+	}
+	sess := getResp.Session
+
+	// 2. Extract events
+	var events []*session.Event
+	if sess.Events() != nil {
+		for ev := range sess.Events().All() {
+			events = append(events, ev)
+		}
+	}
+
+	if len(events) <= 12 {
+		return fmt.Errorf("session history too short to compact (has %d event(s), minimum 12 required)", len(events))
+	}
+
+	// 3. Convert events to genai.Content
+	var contents []*genai.Content
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if ev.Content != nil {
+			contents = append(contents, ev.Content)
+		}
+		if ev.LLMResponse.Content != nil {
+			contents = append(contents, ev.LLMResponse.Content)
+		}
+	}
+
+	// 4. Run compaction
+	compacted := CompactContents(contents, sessionID, llm...)
+
+	// 5. Convert compacted Contents back to session.Events
+	var compactedEvents []*session.Event
+	for _, c := range compacted {
+		if c == nil {
+			continue
+		}
+		ev := &session.Event{
+			Timestamp: time.Now(),
+		}
+		if c.Role == "user" || c.Role == "tool" {
+			ev.Content = c
+		} else {
+			ev.LLMResponse = model.LLMResponse{
+				Content:      c,
+				TurnComplete: true,
+			}
+		}
+		compactedEvents = append(compactedEvents, ev)
+	}
+
+	// 6. Delete old session and recreate it with compacted events in the delegate
+	_ = s.delegate.Delete(ctx, &session.DeleteRequest{SessionID: sessionID})
+
+	// Recreate
+	stateMap := make(map[string]any)
+	if sess.State() != nil {
+		for k, v := range sess.State().All() {
+			stateMap[k] = v
+		}
+	}
+
+	res, err := s.delegate.Create(ctx, &session.CreateRequest{
+		AppName:   sess.AppName(),
+		UserID:    sess.UserID(),
+		SessionID: sessionID,
+		State:     stateMap,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to recreate session during compaction: %w", err)
+	}
+
+	// Append compacted events
+	for _, ev := range compactedEvents {
+		if err := s.delegate.AppendEvent(ctx, res.Session, ev); err != nil {
+			return fmt.Errorf("failed to append compacted event during compaction: %w", err)
+		}
+	}
+
+	// 7. Save session to disk
+	s.mu.Unlock() // unlock temporarily because SaveSession will lock it
+	err = s.SaveSession(ctx, res.Session)
+	s.mu.Lock() // relock for defer unlock
+
+	return err
+}

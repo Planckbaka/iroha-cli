@@ -126,6 +126,9 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 		}
 
 		compactedContents := req.Contents
+		if g.hooks != nil {
+			compactedContents = g.hooks.CompactHistory(req.Contents)
+		}
 
 		if g.hooks != nil {
 			nagMsg := g.hooks.NagReminder()

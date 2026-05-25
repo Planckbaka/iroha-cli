@@ -25,7 +25,9 @@ import (
 )
 
 // runnerHooks implements llm.AdapterHooks using the agent package's global managers.
-type runnerHooks struct{}
+type runnerHooks struct {
+	modelGetter func() model.LLM
+}
 
 func (runnerHooks) NagReminder() string {
 	if GlobalTodoManager.RoundsSinceUpdate() >= 3 {
@@ -36,6 +38,18 @@ func (runnerHooks) NagReminder() string {
 
 func (runnerHooks) NoteRound() {
 	GlobalTodoManager.NoteRoundWithoutUpdate()
+}
+
+func (r runnerHooks) CompactHistory(contents []*genai.Content) []*genai.Content {
+	sessID := GlobalLogger.sessionID
+	if sessID == "" {
+		sessID = "session-default"
+	}
+	var m model.LLM
+	if r.modelGetter != nil {
+		m = r.modelGetter()
+	}
+	return CompactContents(contents, sessID, m)
 }
 
 func buildSystemPrompt() string {
@@ -171,7 +185,14 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	// 2. Create our abstract model adapter
 	systemPrompt := buildSystemPrompt()
-	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
+	var modelAdapter model.LLM
+	hooks := runnerHooks{
+		modelGetter: func() model.LLM {
+			return modelAdapter
+		},
+	}
+	var err error
+	modelAdapter, err = llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, hooks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model adapter: %w", err)
 	}
@@ -276,6 +297,10 @@ func (cr *CustomRunner) ModelName() string {
 		return "Unknown"
 	}
 	return cr.llmModel.Name()
+}
+
+func (cr *CustomRunner) GetModel() model.LLM {
+	return cr.llmModel
 }
 
 func (cr *CustomRunner) GetTokenUsage() int {
@@ -383,8 +408,9 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 			},
 		}
 
+		runCtx := context.WithValue(ctx, "session_id", sessionID)
 		runConfig := runner.WithStateDelta(nil)
-		events := cr.adkRunner.Run(ctx, userID, sessionID, userMsg, agent.RunConfig{
+		events := cr.adkRunner.Run(runCtx, userID, sessionID, userMsg, agent.RunConfig{
 			StreamingMode: agent.StreamingModeSSE,
 		}, runConfig)
 
@@ -1018,9 +1044,58 @@ func rollbackPendingEdits() {
 	pendingEditSnapshots.snapshots = make(map[string]string)
 }
 
-// commitPendingEdits clears all snapshots after a successful turn.
+// UndoGroup tracks pre-edit file states for a single conversational turn.
+type UndoGroup struct {
+	Snapshots map[string]string
+}
+
+// UndoHistoryManager maintains a session-wide history of UndoGroups.
+type UndoHistoryManager struct {
+	mu      sync.Mutex
+	history []UndoGroup
+}
+
+func (u *UndoHistoryManager) Push(group UndoGroup) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.history = append(u.history, group)
+}
+
+func (u *UndoHistoryManager) PopAndUndo() (int, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if len(u.history) == 0 {
+		return 0, fmt.Errorf("no changes to undo")
+	}
+
+	last := u.history[len(u.history)-1]
+	u.history = u.history[:len(u.history)-1]
+
+	count := 0
+	for path, content := range last.Snapshots {
+		if content == "" {
+			_ = os.Remove(path)
+		} else {
+			_ = os.WriteFile(path, []byte(content), 0644)
+		}
+		count++
+	}
+
+	return count, nil
+}
+
+var GlobalUndoManager = &UndoHistoryManager{}
+
+// commitPendingEdits pushes the current turn's snapshots onto the GlobalUndoManager and clears active pending snapshots.
 func commitPendingEdits() {
 	pendingEditSnapshots.mu.Lock()
 	defer pendingEditSnapshots.mu.Unlock()
+
+	if len(pendingEditSnapshots.snapshots) > 0 {
+		GlobalUndoManager.Push(UndoGroup{
+			Snapshots: pendingEditSnapshots.snapshots,
+		})
+	}
 	pendingEditSnapshots.snapshots = make(map[string]string)
 }

@@ -486,6 +486,14 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	subagentRunTool, err := functiontool.New(functiontool.Config{
+		Name:        "subagent_run",
+		Description: "Spawn a specialized subagent to execute a specific sub-task or research question in parallel. The subagent operates within its own clean context window and returns a text summary of its findings.",
+	}, SubagentRunHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	// s21 LSP Tools — load user LSP server config if available
 	if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
 		servers := make([]LSPServerConfig, len(cfg.LSPServers))
@@ -546,6 +554,7 @@ func GetSWETools() ([]tool.Tool, error) {
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,
 		schCreateTool, schListTool, schDeleteTool,
+		subagentRunTool,
 
 		// s15
 		spawnTeammateTool, listTeammatesTool, sendMessageTool, readInboxTool, broadcastTool,
