@@ -46,11 +46,11 @@ type LSPServerConfig struct {
 
 // Config holds LLM model and credentials configurations
 type Config struct {
-	Provider   string           `json:"provider"`
-	Model      string           `json:"model"`
-	APIKey     string           `json:"api_key"`
-	BaseURL    string           `json:"base_url,omitempty"`
-	APIFormat  string           `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
+	Provider   string            `json:"provider"`
+	Model      string            `json:"model"`
+	APIKey     string            `json:"api_key"`
+	BaseURL    string            `json:"base_url,omitempty"`
+	APIFormat  string            `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
 	LSPServers []LSPServerConfig `json:"lsp_servers,omitempty"`
 }
 

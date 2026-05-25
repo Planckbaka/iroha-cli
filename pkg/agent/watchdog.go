@@ -19,11 +19,11 @@ type CrashRecord struct {
 
 // CheckpointData holds serialized state for crash recovery.
 type CheckpointData struct {
-	AgentName   string          `json:"agent_name"`
-	Checkpoint  json.RawMessage `json:"checkpoint"`
-	SavedAt     time.Time       `json:"saved_at"`
-	LastMsgID   string          `json:"last_msg_id"`
-	Processed   int             `json:"processed"`
+	AgentName  string          `json:"agent_name"`
+	Checkpoint json.RawMessage `json:"checkpoint"`
+	SavedAt    time.Time       `json:"saved_at"`
+	LastMsgID  string          `json:"last_msg_id"`
+	Processed  int             `json:"processed"`
 }
 
 // Watchdog manages a child process teammate with crash tolerance.
@@ -343,4 +343,3 @@ func (w *Watchdog) loadDeadLetters() {
 		"count":    len(letters),
 	})
 }
-

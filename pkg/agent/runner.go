@@ -312,6 +312,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				rollbackPendingEdits()
 				err := fmt.Errorf("panic in agent execution: %v\n%s", r, debug.Stack())
 				LogError(CatSystem, "runner_panic", "Agent execution panicked", err, map[string]any{
 					"session_id": sessionID,
@@ -390,6 +391,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		var responseTextLen int
 		for ev, err := range events {
 			if ctx.Err() != nil {
+				rollbackPendingEdits()
 				return
 			}
 			if err != nil {
@@ -418,7 +420,9 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 			SessionID:      sessionID,
 		})
 
-		LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
+		commitPendingEdits()
+
+			LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
 			"session_id": sessionID,
 		})
 
@@ -543,7 +547,11 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		"args":     args,
 	})
 
+	// Record permission decision for trace logging
+	toolStartTime := time.Now()
+
 	if decision == "deny" {
+		LogToolTrace(b.Name(), args, "denied", time.Since(toolStartTime).Milliseconds())
 		return nil, fmt.Errorf("operation denied by security policy: %s", reason)
 	}
 
@@ -554,7 +562,13 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 
 	if decision == "allow" {
 		// Silent execution — but still run through hooks
-		return b.runWithHooks(ctx, args, runnable)
+		result, err := b.runWithHooks(ctx, args, runnable)
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		LogToolTrace(b.Name(), args, status, time.Since(toolStartTime).Milliseconds())
+		return result, err
 	}
 
 	// Step 2: "ask" behavior — first run auto-review, then optionally show human confirmation
@@ -692,6 +706,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	select {
 	case Bridge.PromptChan <- promptMsg:
 	case <-Bridge.CancelChanRead():
+		LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
 		return nil, fmt.Errorf("operation cancelled")
 	}
 
@@ -700,6 +715,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	select {
 	case approved = <-Bridge.ResponseChan:
 	case <-Bridge.CancelChanRead():
+		LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
 		return nil, fmt.Errorf("operation cancelled")
 	}
 
@@ -713,17 +729,30 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		})
 		GlobalPermissionManager.NoteApproval()
 		time.Sleep(200 * time.Millisecond) // Smooth animation transition
-		return b.runWithHooks(ctx, args, runnable)
+		result, err := b.runWithHooks(ctx, args, runnable)
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		LogToolTrace(b.Name(), args, status, time.Since(toolStartTime).Milliseconds())
+		return result, err
 	}
 
 	if approved == "y" {
 		GlobalPermissionManager.NoteApproval()
 		time.Sleep(200 * time.Millisecond) // Smooth animation transition
-		return b.runWithHooks(ctx, args, runnable)
+		result, err := b.runWithHooks(ctx, args, runnable)
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		LogToolTrace(b.Name(), args, status, time.Since(toolStartTime).Milliseconds())
+		return result, err
 	}
 
 	// Any other value or "n" is rejected
 	denials := GlobalPermissionManager.NoteDenial()
+	LogToolTrace(b.Name(), args, "denied", time.Since(toolStartTime).Milliseconds())
 	warnMsg := ""
 	if denials >= 3 {
 		warnMsg = fmt.Sprintf("\n⚠️  \x1b[1;33m[Safety Fuse]\x1b[0m %d consecutive denials. Consider switching to read-only Plan mode by typing `/mode plan`.", denials)
@@ -960,3 +989,58 @@ func (cb *ToolCircuitBreaker) Reset() {
 }
 
 var GlobalToolCircuitBreaker = &ToolCircuitBreaker{}
+
+// ── Atomic Edit Support ─────────────────────────────────────────────────────
+
+// pendingEditSnapshots tracks original file contents before edits for rollback support.
+var pendingEditSnapshots struct {
+	mu        sync.Mutex
+	snapshots map[string]string // absolute path -> original content
+}
+
+func init() {
+	pendingEditSnapshots.snapshots = make(map[string]string)
+}
+
+// snapshotFileBeforeEdit saves the original content of a file if not already snapshotted.
+// Returns true if a new snapshot was created, false if one already existed.
+func snapshotFileBeforeEdit(absPath string) bool {
+	pendingEditSnapshots.mu.Lock()
+	defer pendingEditSnapshots.mu.Unlock()
+
+	if _, exists := pendingEditSnapshots.snapshots[absPath]; exists {
+		return false
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		// File doesn't exist yet (new file), snapshot empty string
+		pendingEditSnapshots.snapshots[absPath] = ""
+		return true
+	}
+	pendingEditSnapshots.snapshots[absPath] = string(data)
+	return true
+}
+
+// rollbackPendingEdits restores all files to their pre-edit state and clears snapshots.
+func rollbackPendingEdits() {
+	pendingEditSnapshots.mu.Lock()
+	defer pendingEditSnapshots.mu.Unlock()
+
+	for path, content := range pendingEditSnapshots.snapshots {
+		if content == "" {
+			// File was newly created by the edit; remove it
+			_ = os.Remove(path)
+		} else {
+			_ = os.WriteFile(path, []byte(content), 0644)
+		}
+	}
+	pendingEditSnapshots.snapshots = make(map[string]string)
+}
+
+// commitPendingEdits clears all snapshots after a successful turn.
+func commitPendingEdits() {
+	pendingEditSnapshots.mu.Lock()
+	defer pendingEditSnapshots.mu.Unlock()
+	pendingEditSnapshots.snapshots = make(map[string]string)
+}

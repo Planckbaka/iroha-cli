@@ -117,6 +117,95 @@ func SetLSPServers(servers []LSPServerConfig) {
 	lspServers = merged
 }
 
+// lspFileConfig represents the structure of ~/.iroha/lsp.json
+type lspFileConfig struct {
+	Servers map[string]LSPServerConfig `json:"servers"`
+}
+
+// loadLSPConfig loads LSP server configuration from ~/.iroha/lsp.json.
+// If the file does not exist or is invalid, defaults are preserved.
+func loadLSPConfig() map[string]LSPServerConfig {
+	defaults := map[string]LSPServerConfig{
+		"go":         {Language: "go", Command: "gopls", Args: []string{"-mode=stdio"}, FilePatterns: []string{"*.go"}},
+		"typescript": {Language: "typescript", Command: "typescript-language-server", Args: []string{"--stdio"}, FilePatterns: []string{"*.ts", "*.tsx", "*.js", "*.jsx"}},
+		"python":     {Language: "python", Command: "pyright-langserver", Args: []string{"--stdio"}, FilePatterns: []string{"*.py"}},
+		"rust":       {Language: "rust", Command: "rust-analyzer", Args: []string{}, FilePatterns: []string{"*.rs"}},
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return defaults
+	}
+	configPath := filepath.Join(home, ".iroha", "lsp.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return defaults
+	}
+
+	var fileCfg lspFileConfig
+	if err := json.Unmarshal(data, &fileCfg); err != nil {
+		return defaults
+	}
+
+	// Merge: user config overrides defaults
+	for lang, serverCfg := range fileCfg.Servers {
+		serverCfg.Language = lang
+		defaults[lang] = serverCfg
+	}
+	return defaults
+}
+
+// LoadAndApplyLSPConfig loads LSP configuration from ~/.iroha/lsp.json and applies it.
+func LoadAndApplyLSPConfig() {
+	configs := loadLSPConfig()
+	var servers []LSPServerConfig
+	for _, cfg := range configs {
+		servers = append(servers, cfg)
+	}
+	if len(servers) > 0 {
+		SetLSPServers(servers)
+	}
+}
+
+// lspIdleCleanupInterval is how often the idle cleanup goroutine checks for stale clients.
+const lspIdleCleanupInterval = 1 * time.Minute
+
+// lspIdleTimeout is how long a client must be unused before it is closed.
+const lspIdleTimeout = 5 * time.Minute
+
+// startLSPIdleCleanup starts a background goroutine (once) that periodically closes
+// LSP clients unused for longer than lspIdleTimeout.
+func startLSPIdleCleanup() {
+	go func() {
+		ticker := time.NewTicker(lspIdleCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			lspClientsMu.Lock()
+			now := time.Now()
+			for key, client := range lspClients {
+				client.mu.Lock()
+				if !client.isClosed && now.Sub(client.lastUsed) > lspIdleTimeout {
+					client.isClosed = true
+					_ = client.stdin.Close()
+					_ = client.stdout.Close()
+					if client.cmd != nil && client.cmd.Process != nil {
+						_ = client.cmd.Process.Kill()
+					}
+					for id, ch := range client.pending {
+						close(ch)
+						delete(client.pending, id)
+					}
+					delete(lspClients, key)
+				}
+				client.mu.Unlock()
+			}
+			lspClientsMu.Unlock()
+		}
+	}()
+}
+
+var lspIdleCleanupOnce sync.Once
+
 // lspServerForLanguage returns the LSPServerConfig for a given language, or nil if not configured.
 func lspServerForLanguage(lang string) *LSPServerConfig {
 	for i := range lspServers {
@@ -150,6 +239,20 @@ func languageFromPath(filePath string) string {
 	}
 }
 
+// languageFromPathOrError detects the language and returns a descriptive error
+// including the file extension if no language is detected.
+func languageFromPathOrError(filePath string) (string, error) {
+	lang := languageFromPath(filePath)
+	if lang == "" {
+		ext := filepath.Ext(filePath)
+		if ext == "" {
+			return "", fmt.Errorf("no LSP server configured: file has no extension")
+		}
+		return "", fmt.Errorf("no LSP server configured for %s files", ext)
+	}
+	return lang, nil
+}
+
 type LSPClient struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -160,6 +263,7 @@ type LSPClient struct {
 	reqID    int64
 	pending  map[int64]chan *jsonrpcResponse
 	isClosed bool
+	lastUsed time.Time
 }
 
 var (
@@ -173,10 +277,16 @@ func lspClientKey(workdir, language string) string {
 }
 
 func getLSPClient(workdir, language string) (*LSPClient, error) {
+	// Ensure idle cleanup goroutine is started exactly once.
+	lspIdleCleanupOnce.Do(startLSPIdleCleanup)
+
 	key := lspClientKey(workdir, language)
 	lspClientsMu.Lock()
 	client, exists := lspClients[key]
 	if exists && !client.isClosed {
+		client.mu.Lock()
+		client.lastUsed = time.Now()
+		client.mu.Unlock()
 		lspClientsMu.Unlock()
 		return client, nil
 	}
@@ -192,6 +302,7 @@ func getLSPClient(workdir, language string) (*LSPClient, error) {
 		lspClientsMu.Unlock()
 		return nil, err
 	}
+	c.lastUsed = time.Now()
 	lspClients[key] = c
 	lspClientsMu.Unlock()
 	return c, nil
@@ -551,9 +662,9 @@ func LSPGotoDefinitionHandler(ctx tool.Context, args LSPGotoDefinitionArgs) (LSP
 	}
 
 	workdir := getWorkdir(ctx)
-	lang := languageFromPath(resolvedPath)
-	if lang == "" {
-		return LSPGotoDefinitionResult{Success: false, Message: "Could not detect language from file extension"}, nil
+	lang, langErr := languageFromPathOrError(resolvedPath)
+	if langErr != nil {
+		return LSPGotoDefinitionResult{Success: false, Message: langErr.Error()}, nil
 	}
 	client, err := getLSPClient(workdir, lang)
 	if err != nil {
@@ -626,9 +737,9 @@ func LSPFindReferencesHandler(ctx tool.Context, args LSPFindReferencesArgs) (LSP
 	}
 
 	workdir := getWorkdir(ctx)
-	lang := languageFromPath(resolvedPath)
-	if lang == "" {
-		return LSPFindReferencesResult{Success: false}, WrapToolError("lsp_find_references", args, fmt.Errorf("could not detect language from file extension"))
+	lang, langErr := languageFromPathOrError(resolvedPath)
+	if langErr != nil {
+		return LSPFindReferencesResult{Success: false}, WrapToolError("lsp_find_references", args, langErr)
 	}
 	client, err := getLSPClient(workdir, lang)
 	if err != nil {
@@ -707,9 +818,9 @@ func LSPDocumentSymbolsHandler(ctx tool.Context, args LSPDocumentSymbolsArgs) (L
 	}
 
 	workdir := getWorkdir(ctx)
-	lang := languageFromPath(resolvedPath)
-	if lang == "" {
-		return LSPDocumentSymbolsResult{Success: false}, WrapToolError("lsp_document_symbols", args, fmt.Errorf("could not detect language from file extension"))
+	lang, langErr := languageFromPathOrError(resolvedPath)
+	if langErr != nil {
+		return LSPDocumentSymbolsResult{Success: false}, WrapToolError("lsp_document_symbols", args, langErr)
 	}
 	client, err := getLSPClient(workdir, lang)
 	if err != nil {
@@ -772,4 +883,234 @@ func flattenDocumentSymbols(symbols []lspDocumentSymbol) []FlatSymbol {
 	}
 	walk(symbols)
 	return result
+}
+
+// ─── lsp_hover ──────────────────────────────────────────────────────────
+
+type LSPHoverArgs struct {
+	File   string `json:"file" description:"File path"`
+	Line   int    `json:"line" description:"Line number (1-based)"`
+	Column int    `json:"column" description:"Column offset (1-based)"`
+}
+
+type LSPHoverResult struct {
+	Content string `json:"content"`
+}
+
+// lspHoverContent models the MarkedString or MarkupContent from the LSP Hover response.
+type lspHoverContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+type lspHoverResponse struct {
+	Contents lspHoverContents `json:"contents"`
+	Range    *lspRange        `json:"range,omitempty"`
+}
+
+// lspHoverContents can be a string, MarkupContent, or array of MarkedString.
+type lspHoverContents json.RawMessage
+
+func LSPHoverHandler(ctx tool.Context, args LSPHoverArgs) (LSPHoverResult, error) {
+	resolvedPath := resolvePath(ctx, args.File)
+	if err := validateSandboxPath(ctx, resolvedPath); err != nil {
+		return LSPHoverResult{}, err
+	}
+
+	workdir := getWorkdir(ctx)
+	lang, langErr := languageFromPathOrError(resolvedPath)
+	if langErr != nil {
+		return LSPHoverResult{}, WrapToolError("lsp_hover", args, langErr)
+	}
+	client, err := getLSPClient(workdir, lang)
+	if err != nil {
+		return LSPHoverResult{}, WrapToolError("lsp_hover", args, err)
+	}
+
+	params := map[string]any{
+		"textDocument": map[string]any{
+			"uri": pathToURI(resolvedPath),
+		},
+		"position": map[string]any{
+			"line":      args.Line - 1,
+			"character": args.Column - 1,
+		},
+	}
+
+	resp, err := client.Call("textDocument/hover", params)
+	if err != nil {
+		return LSPHoverResult{}, WrapToolError("lsp_hover", args, err)
+	}
+
+	// A null result means no hover information available
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return LSPHoverResult{Content: "No hover information available at this position."}, nil
+	}
+
+	var hover lspHoverResponse
+	if err := json.Unmarshal(resp.Result, &hover); err != nil {
+		// Try returning raw result as fallback
+		return LSPHoverResult{Content: string(resp.Result)}, nil
+	}
+
+	content := formatHoverContents(json.RawMessage(hover.Contents))
+	return LSPHoverResult{Content: content}, nil
+}
+
+// formatHoverContents extracts readable text from LSP hover contents,
+// which can be a string, MarkupContent, or array of MarkedString.
+func formatHoverContents(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "No hover information available."
+	}
+
+	// Try as plain string
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+
+	// Try as MarkupContent {kind, value}
+	var mc lspHoverContent
+	if json.Unmarshal(raw, &mc) == nil && mc.Value != "" {
+		return mc.Value
+	}
+
+	// Try as array of MarkedString
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) == nil {
+		var parts []string
+		for _, item := range arr {
+			// Each item could be a string or a {language, value} object
+			var str string
+			if json.Unmarshal(item, &str) == nil {
+				parts = append(parts, str)
+				continue
+			}
+			var ms struct {
+				Language string `json:"language"`
+				Value    string `json:"value"`
+			}
+			if json.Unmarshal(item, &ms) == nil {
+				parts = append(parts, ms.Value)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n")
+		}
+	}
+
+	// Fallback: return raw
+	return strings.TrimSpace(string(raw))
+}
+
+// ─── lsp_diagnostics ────────────────────────────────────────────────────
+
+type LSPDiagnosticsArgs struct {
+	File string `json:"file" description:"File path to check"`
+}
+
+type LSPDiagnosticsResult struct {
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+type Diagnostic struct {
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"` // "error", "warning", "info", "hint"
+}
+
+// lspDiagnosticItem models a single Diagnostic from the LSP response.
+type lspDiagnosticItem struct {
+	Range    lspRange        `json:"range"`
+	Severity int             `json:"severity"`
+	Message  string          `json:"message"`
+	Source   string          `json:"source,omitempty"`
+	Code     json.RawMessage `json:"code,omitempty"`
+}
+
+// lspFullDiagnosticResponse models the response from textDocument/diagnostic (pull diagnostics).
+type lspFullDiagnosticResponse struct {
+	Items []lspDiagnosticItem `json:"items"`
+}
+
+func LSPDiagnosticsHandler(ctx tool.Context, args LSPDiagnosticsArgs) (LSPDiagnosticsResult, error) {
+	resolvedPath := resolvePath(ctx, args.File)
+	if err := validateSandboxPath(ctx, resolvedPath); err != nil {
+		return LSPDiagnosticsResult{}, err
+	}
+
+	workdir := getWorkdir(ctx)
+	lang, langErr := languageFromPathOrError(resolvedPath)
+	if langErr != nil {
+		return LSPDiagnosticsResult{}, WrapToolError("lsp_diagnostics", args, langErr)
+	}
+	client, err := getLSPClient(workdir, lang)
+	if err != nil {
+		return LSPDiagnosticsResult{}, WrapToolError("lsp_diagnostics", args, err)
+	}
+
+	params := map[string]any{
+		"textDocument": map[string]any{
+			"uri": pathToURI(resolvedPath),
+		},
+	}
+
+	// Try pull diagnostics first (textDocument/diagnostic, LSP 3.17+)
+	resp, err := client.Call("textDocument/diagnostic", params)
+	if err != nil {
+		// If pull diagnostics is not supported, return empty with a note
+		return LSPDiagnosticsResult{
+			Diagnostics: []Diagnostic{},
+		}, nil
+	}
+
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return LSPDiagnosticsResult{
+			Diagnostics: []Diagnostic{},
+		}, nil
+	}
+
+	var diagResp lspFullDiagnosticResponse
+	if err := json.Unmarshal(resp.Result, &diagResp); err != nil {
+		// Try as direct array (some servers return arrays directly)
+		var items []lspDiagnosticItem
+		if err2 := json.Unmarshal(resp.Result, &items); err2 != nil {
+			return LSPDiagnosticsResult{
+				Diagnostics: []Diagnostic{},
+			}, nil
+		}
+		diagResp.Items = items
+	}
+
+	var diags []Diagnostic
+	for _, d := range diagResp.Items {
+		diags = append(diags, Diagnostic{
+			Line:     d.Range.Start.Line + 1,
+			Column:   d.Range.Start.Character + 1,
+			Message:  d.Message,
+			Severity: severityToString(d.Severity),
+		})
+	}
+
+	return LSPDiagnosticsResult{
+		Diagnostics: diags,
+	}, nil
+}
+
+// severityToString converts an LSP DiagnosticSeverity number to a human-readable string.
+func severityToString(severity int) string {
+	switch severity {
+	case 1:
+		return "error"
+	case 2:
+		return "warning"
+	case 3:
+		return "info"
+	case 4:
+		return "hint"
+	default:
+		return "info"
+	}
 }

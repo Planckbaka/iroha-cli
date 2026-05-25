@@ -9,11 +9,11 @@ import (
 
 	"iroha/pkg/agent"
 
+	"github.com/atotto/clipboard"
+	"github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
-	"github.com/atotto/clipboard"
-	"github.com/aymanbagabas/go-osc52/v2"
 )
 
 // handleKeyMsg processes key press events depending on TUI state
@@ -666,6 +666,73 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
+	if cmdName == "/trace" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+
+		traces, err := agent.ReadTraceTail(m.SessionID, 20)
+		var sb strings.Builder
+		sb.WriteString(StyleKeyActive.Render("Tool Trace (last 20)") + "\n")
+
+		if err != nil || len(traces) == 0 {
+			sb.WriteString("  " + StyleKeyHelp.Render("no trace data available for this session"))
+		} else {
+			// Header
+			headerStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+			sb.WriteString(fmt.Sprintf("  %s  %s  %s  %s  %s\n",
+				headerStyle.Render(fmt.Sprintf("%-20s", "TIMESTAMP")),
+				headerStyle.Render(fmt.Sprintf("%-16s", "TOOL")),
+				headerStyle.Render(fmt.Sprintf("%-10s", "STATUS")),
+				headerStyle.Render(fmt.Sprintf("%-10s", "DURATION")),
+				headerStyle.Render(fmt.Sprintf("%-16s", "ARGS_HASH")),
+			))
+			sb.WriteString("  " + strings.Repeat("-", 74) + "\n")
+
+			for _, t := range traces {
+				var statusStyle lipgloss.Style
+				switch t.ResultStatus {
+				case "success":
+					statusStyle = lipgloss.NewStyle().Foreground(ColorSuccess)
+				case "error":
+					statusStyle = lipgloss.NewStyle().Foreground(ColorDanger)
+				case "denied", "blocked":
+					statusStyle = lipgloss.NewStyle().Foreground(ColorWarning)
+				default:
+					statusStyle = lipgloss.NewStyle().Foreground(ColorSecondary)
+				}
+
+				// Shorten timestamp to just time part
+				tsShort := t.Timestamp
+				if len(tsShort) > 19 {
+					parts := strings.SplitN(tsShort, "T", 2)
+					if len(parts) == 2 {
+						tsShort = parts[1][:8]
+					}
+				}
+
+				toolName := t.Tool
+				if len(toolName) > 16 {
+					toolName = toolName[:15] + "~"
+				}
+
+				sb.WriteString(fmt.Sprintf("  %-20s  %-16s  %s  %-10s  %-16s\n",
+					tsShort,
+					toolName,
+					statusStyle.Render(fmt.Sprintf("%-10s", t.ResultStatus)),
+					fmt.Sprintf("%dms", t.DurationMS),
+					t.ArgsHash,
+				))
+			}
+		}
+
+		sb.WriteString("\n  " + StyleKeyHelp.Render("Tip: Trace files are auto-cleaned after 7 days"))
+
+		m.History = append(m.History, userLog, sb.String())
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+		return m, nil, true
+	}
+
 	if cmdName == "/doctor" {
 		m.HistoryManager.Add(inputVal)
 		userLog := StyleUserMsg.Render("> " + inputVal)
@@ -730,8 +797,8 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		replyLog := StyleToolSuccess.Render(fmt.Sprintf("Resumed session: %s", target.ID[:8])) +
 			"\n" + StyleKeyHelp.Render(fmt.Sprintf("First message: %s", summary)) +
 			"\n" + StyleKeyHelp.Render(fmt.Sprintf("Tokens: ~%s | Updated: %s",
-				fmt.Sprintf("%d", target.TotalTokens),
-				target.LastUpdateTime.Format("01-02 15:04")))
+			fmt.Sprintf("%d", target.TotalTokens),
+			target.LastUpdateTime.Format("01-02 15:04")))
 
 		m.History = append(m.History, userLog, replyLog)
 		m.TextArea.SetValue("")

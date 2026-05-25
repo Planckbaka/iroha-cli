@@ -472,6 +472,22 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	lspHoverTool, err := functiontool.New(functiontool.Config{
+		Name:        "lsp_hover",
+		Description: "Get type information and documentation at a specific position in a file via LSP. Returns hover content including type signatures, doc comments, and inferred types.",
+	}, LSPHoverHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	lspDiagTool, err := functiontool.New(functiontool.Config{
+		Name:        "lsp_diagnostics",
+		Description: "Get diagnostic errors and warnings for a file using the language server. Returns a list of issues with line, column, severity, and message. Uses pull diagnostics (LSP 3.17+); falls back to empty if the server does not support it.",
+	}, LSPDiagnosticsHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	resTools := []tool.Tool{
 		readTool, writeTool, editTool, listDirTool, grepTool, findTool, shellTool, todoTool,
 		memorySaveTool, memoryListTool,
@@ -492,7 +508,7 @@ func GetSWETools() ([]tool.Tool, error) {
 		// s20
 		ciWatchTool,
 		// s21
-		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool,
+		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool, lspHoverTool, lspDiagTool,
 	}
 
 	// s19 Dynamic MCP Tools

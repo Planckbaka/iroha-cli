@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,10 +14,230 @@ import (
 	"google.golang.org/genai"
 )
 
+// --- Phase 2: Expanded security check functions ---
+
+var (
+	reHeredoc             = regexp.MustCompile(`<<-?|<<<`)
+	reEnvExpansion        = regexp.MustCompile(`\$\{?[A-Za-z_][A-Za-z0-9_]*`)
+	reProcessSubstitution = regexp.MustCompile(`[<>]\(`)
+	reNamedPipe           = regexp.MustCompile(`\b(mkfifo|mknod)\b`)
+	reTTVEscape           = regexp.MustCompile(`\\x1[bB]|\\033|\\e`)
+	reFileDescriptor      = regexp.MustCompile(`exec\s+\d+>|[<>]&\d`)
+	reUnsafeSource        = regexp.MustCompile(`(?:^|\s)(?:source|\.)\s+/`)
+	reEncodingAttack      = regexp.MustCompile(`\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}`)
+	reProxyInjection      = regexp.MustCompile(`ProxyCommand=|git\s+-c\s+.*=\s*`)
+	reUnsafeFindPipe      = regexp.MustCompile(`find\b.*\|\s*while\s+read\b.*\b(rm|mv)\b`)
+)
+
+func checkHeredoc(cmd string) (safe bool, reason string) {
+	if reHeredoc.MatchString(cmd) {
+		return false, "heredoc abuse detected"
+	}
+	return true, ""
+}
+
+func checkEnvExpansion(cmd string) (safe bool, reason string) {
+	// Only flag env expansion in write-context commands (redirects, tee, write operations)
+	writeIndicators := []string{">", ">>", "tee "}
+	normalized := normalizeCommand(cmd)
+	for _, indicator := range writeIndicators {
+		if strings.Contains(normalized, indicator) {
+			if reEnvExpansion.MatchString(cmd) {
+				return false, "environment variable expansion in command"
+			}
+		}
+	}
+	return true, ""
+}
+
+func checkProcessSubstitution(cmd string) (safe bool, reason string) {
+	if reProcessSubstitution.MatchString(cmd) {
+		return false, "process substitution detected"
+	}
+	return true, ""
+}
+
+func checkNamedPipe(cmd string) (safe bool, reason string) {
+	if reNamedPipe.MatchString(cmd) {
+		return false, "named pipe creation detected"
+	}
+	return true, ""
+}
+
+func checkTTVEscape(cmd string) (safe bool, reason string) {
+	if reTTVEscape.MatchString(cmd) {
+		return false, "terminal escape sequence detected"
+	}
+	return true, ""
+}
+
+func checkFileDescriptor(cmd string) (safe bool, reason string) {
+	if reFileDescriptor.MatchString(cmd) {
+		return false, "file descriptor manipulation detected"
+	}
+	return true, ""
+}
+
+func checkUnsafeSource(cmd string) (safe bool, reason string) {
+	if reUnsafeSource.MatchString(cmd) {
+		return false, "sourcing external script detected"
+	}
+	return true, ""
+}
+
+func checkEncodingAttack(cmd string) (safe bool, reason string) {
+	if reEncodingAttack.MatchString(cmd) {
+		return false, "encoding escape sequence detected"
+	}
+	return true, ""
+}
+
+func checkProxyInjection(cmd string) (safe bool, reason string) {
+	if reProxyInjection.MatchString(cmd) {
+		return false, "proxy command injection detected"
+	}
+	return true, ""
+}
+
+func checkUnsafeFindPipe(cmd string) (safe bool, reason string) {
+	if reUnsafeFindPipe.MatchString(cmd) {
+		return false, "unsafe find piped to destructive command"
+	}
+	return true, ""
+}
+
 // AutoReviewResult represents the LLM's safety judgment for a shell command
 type AutoReviewResult struct {
 	Safe   bool   // true = safe to auto-approve, false = needs human review
 	Reason string // human-readable explanation
+}
+
+// --- Phase 2: 4-Tier Risk Classifier ---
+
+// RiskTier represents the risk classification level for a tool operation.
+type RiskTier int
+
+const (
+	TierTrusted  RiskTier = iota // Auto-approve, no review
+	TierLowRisk                   // Auto-approve with logging
+	TierMediumRisk                // Require LLM review
+	TierHighRisk                  // Always ask human
+)
+
+func (t RiskTier) String() string {
+	switch t {
+	case TierTrusted:
+		return "trusted"
+	case TierLowRisk:
+		return "low_risk"
+	case TierMediumRisk:
+		return "medium_risk"
+	case TierHighRisk:
+		return "high_risk"
+	default:
+		return "unknown"
+	}
+}
+
+// trustedShellCommands is the set of commands auto-approved in shell_run.
+var trustedShellCommands = map[string]bool{
+	"ls": true, "git status": true, "git log": true, "git diff": true, "git branch": true,
+	"cat": true, "head": true, "tail": true, "wc": true, "echo": true, "pwd": true, "which": true, "env": true,
+	"go build": true, "go test": true, "go vet": true, "go mod tidy": true,
+	"grep": true, "find": true, "sort": true, "uniq": true,
+}
+
+// highRiskShellCommands is the set of commands that always require human approval.
+var highRiskShellCommands = map[string]bool{
+	"rm": true, "sudo": true, "chmod": true, "chown": true,
+	"dd": true, "mkfs": true, "fdisk": true,
+}
+
+// highRiskShellPrefixes matches command prefixes for piped-destructive patterns.
+var highRiskShellPrefixes = []string{
+	"curl ", "wget ",
+}
+
+// ClassifyTool returns a risk tier for a given tool invocation.
+// It uses fail-safe defaults: any error or unknown input maps to TierHighRisk.
+func ClassifyTool(toolName string, args any) (RiskTier, string) {
+	// Fail-safe: extract shell command for shell tools
+	cmdStr := ""
+	if toolName == "shell_run" || toolName == "background_run" {
+		if m, ok := args.(map[string]any); ok {
+			cmdStr, _ = m["command"].(string)
+		} else if m, ok := args.(ShellRunArgs); ok {
+			cmdStr = m.Command
+		} else if m, ok := args.(BackgroundRunArgs); ok {
+			cmdStr = m.Command
+		}
+	}
+
+	switch toolName {
+	case "file_read", "list_directory", "search_grep", "find_files":
+		return TierTrusted, "read-only tool, auto-approved"
+
+	case "file_write", "file_edit":
+		// File writes are low risk (path-based heuristics still apply via ReviewFileOperation)
+		return TierLowRisk, fmt.Sprintf("file write tool %s, auto-approved with logging", toolName)
+
+	case "shell_run", "background_run":
+		return classifyShellCommand(cmdStr)
+
+	default:
+		// Fail-safe: unknown tools are high risk
+		return TierHighRisk, fmt.Sprintf("unknown tool %q, requires human approval", toolName)
+	}
+}
+
+// classifyShellCommand classifies a shell command into a risk tier.
+func classifyShellCommand(cmd string) (RiskTier, string) {
+	if cmd == "" {
+		return TierHighRisk, "empty command, requires human approval"
+	}
+
+	normalized := normalizeCommand(cmd)
+
+	// Check high-risk commands first
+	parts := strings.Fields(normalized)
+	if len(parts) > 0 {
+		cmdName := parts[0]
+
+		// Direct high-risk command names
+		if highRiskShellCommands[cmdName] {
+			return TierHighRisk, fmt.Sprintf("high-risk command %q, requires human approval", cmdName)
+		}
+
+		// Check for piped destructive patterns like "curl ... | sh"
+		for _, prefix := range highRiskShellPrefixes {
+			if strings.HasPrefix(normalized, prefix) {
+				if strings.Contains(normalized, "| sh") || strings.Contains(normalized, "| bash") {
+					return TierHighRisk, fmt.Sprintf("piped destructive pattern: %s | sh/bash", prefix)
+				}
+			}
+		}
+
+		// Check trusted commands (exact match or prefix match)
+		if trustedShellCommands[cmdName] {
+			return TierTrusted, fmt.Sprintf("trusted command %q, auto-approved", cmdName)
+		}
+
+		// Multi-word trusted commands (e.g. "git status", "go build")
+		if len(parts) >= 2 {
+			twoWord := parts[0] + " " + parts[1]
+			if trustedShellCommands[twoWord] {
+				return TierTrusted, fmt.Sprintf("trusted command %q, auto-approved", twoWord)
+			}
+		}
+	}
+
+	// If it has shell metacharacters or dangerous patterns, medium risk (LLM review)
+	if strings.ContainsAny(normalized, ";|&$<>`") {
+		return TierMediumRisk, "shell metacharacters detected, requires LLM review"
+	}
+
+	// Unknown command: medium risk (LLM can review)
+	return TierMediumRisk, "unknown command, requires LLM review"
 }
 
 // autoReviewConfig holds the LLM model for the safety reviewer
@@ -459,7 +680,29 @@ func heuristicReview(cmd string) AutoReviewResult {
 		}
 	}
 
-	// 5. Safe read-only commands
+	// 5. Phase 2 expanded security checks
+	newChecks := []func(string) (bool, string){
+		checkHeredoc,
+		checkEnvExpansion,
+		checkProcessSubstitution,
+		checkNamedPipe,
+		checkTTVEscape,
+		checkFileDescriptor,
+		checkUnsafeSource,
+		checkEncodingAttack,
+		checkProxyInjection,
+		checkUnsafeFindPipe,
+	}
+	for _, check := range newChecks {
+		if safe, reason := check(cmd); !safe {
+			return AutoReviewResult{
+				Safe:   false,
+				Reason: fmt.Sprintf("Rule review: %s", reason),
+			}
+		}
+	}
+
+	// 6. Safe read-only commands
 	safeCommands := []string{
 		"ls", "pwd", "cat", "echo", "head", "tail", "wc", "which", "env",
 		"git status", "git log", "git diff", "git branch", "git remote",

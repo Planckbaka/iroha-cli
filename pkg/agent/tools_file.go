@@ -240,7 +240,6 @@ func generateUnifiedDiff(path, oldContent, newContent string) string {
 		newLines = newLines[:len(newLines)-1]
 	}
 
-
 	ops := simpleDiff(oldLines, newLines)
 
 	var buf strings.Builder

@@ -41,21 +41,21 @@ type TeamManager struct {
 	ProcessMessage func(teammate *Teammate, msg TeamMessage) (string, error)
 
 	// Process isolation fields
-	isolationMode bool                      // true = use child processes, false = goroutines (default)
-	ipcBridge     *IPCBridge                // IPC bridge for process isolation
-	watchdogs     map[string]*Watchdog      // teammate name -> watchdog
-	binaryPath    string                    // path to the binary for spawning child processes
+	isolationMode bool                          // true = use child processes, false = goroutines (default)
+	ipcBridge     *IPCBridge                    // IPC bridge for process isolation
+	watchdogs     map[string]*Watchdog          // teammate name -> watchdog
+	binaryPath    string                        // path to the binary for spawning child processes
 	cancelFuncs   map[string]context.CancelFunc // teammate name -> cancel function
 }
 
 // NewTeamManager creates a new TeamManager.
 func NewTeamManager() *TeamManager {
 	return &TeamManager{
-		teamDir:      ResolveTeamDir(),
-		teammates:    make(map[string]*Teammate),
-		activeLoops:  make(map[string]chan struct{}),
-		watchdogs:    make(map[string]*Watchdog),
-		cancelFuncs:  make(map[string]context.CancelFunc),
+		teamDir:     ResolveTeamDir(),
+		teammates:   make(map[string]*Teammate),
+		activeLoops: make(map[string]chan struct{}),
+		watchdogs:   make(map[string]*Watchdog),
+		cancelFuncs: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -515,9 +515,9 @@ func (tm *TeamManager) StartTeammateProcess(ctx context.Context, name string) er
 	}
 	if cp != nil {
 		LogInfo(CatSubagent, "checkpoint_restored", fmt.Sprintf("Restored checkpoint for '%s'", name), map[string]any{
-			"teammate":   name,
-			"saved_at":   cp.SavedAt,
-			"processed":  cp.Processed,
+			"teammate":  name,
+			"saved_at":  cp.SavedAt,
+			"processed": cp.Processed,
 		})
 	}
 
@@ -603,7 +603,7 @@ func (tm *TeamManager) heartbeatChecker(ctx context.Context, name string) {
 				lastActive = t.LastActive
 			} else if time.Since(lastActive) > 45*time.Second {
 				LogWarn(CatSubagent, "heartbeat_stale", fmt.Sprintf("Teammate '%s' heartbeat stale", name), map[string]any{
-					"teammate":   name,
+					"teammate":    name,
 					"last_active": t.LastActive,
 				})
 			}
