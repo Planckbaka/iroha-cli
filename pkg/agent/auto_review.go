@@ -118,10 +118,10 @@ type AutoReviewResult struct {
 type RiskTier int
 
 const (
-	TierTrusted  RiskTier = iota // Auto-approve, no review
-	TierLowRisk                   // Auto-approve with logging
-	TierMediumRisk                // Require LLM review
-	TierHighRisk                  // Always ask human
+	TierTrusted    RiskTier = iota // Auto-approve, no review
+	TierLowRisk                    // Auto-approve with logging
+	TierMediumRisk                 // Require LLM review
+	TierHighRisk                   // Always ask human
 )
 
 func (t RiskTier) String() string {

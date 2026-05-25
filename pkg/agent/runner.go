@@ -422,7 +422,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 
 		commitPendingEdits()
 
-			LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
+		LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
 			"session_id": sessionID,
 		})
 
