@@ -238,9 +238,7 @@ func CompactContents(contents []*genai.Content, sessionID string, llm ...model.L
 		compacted = append(compacted, systemSummary)
 
 		// Re-insert preserved sticky blocks
-		for _, sb := range stickyBlocks {
-			compacted = append(compacted, sb)
-		}
+		compacted = append(compacted, stickyBlocks...)
 
 		// Keep the last 4 rounds
 		for i := len(copied) - 4; i < len(copied); i++ {

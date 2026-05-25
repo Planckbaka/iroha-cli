@@ -240,11 +240,6 @@ func generateUnifiedDiff(path, oldContent, newContent string) string {
 		newLines = newLines[:len(newLines)-1]
 	}
 
-	// Simple LCS-based diff: find matching regions
-	type op struct {
-		typ  string // "equal", "delete", "insert"
-		line string
-	}
 
 	ops := simpleDiff(oldLines, newLines)
 

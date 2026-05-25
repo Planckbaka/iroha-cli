@@ -466,10 +466,10 @@ func heuristicReview(cmd string) AutoReviewResult {
 		"go build", "go test", "go vet", "go list", "go env",
 		"find", "grep", "rg", "fd", "tree",
 		"date", "whoami", "hostname", "uname",
-			"system_profiler", "sysctl", "sw_vers", "systeminfo",
-			"df", "du", "free", "top", "ps", "lsof",
-			"networksetup", "ifconfig", "ping", "traceroute", "nslookup", "dig",
-			"defaults read", "xcodebuild -version", "xcode-select -p",
+		"system_profiler", "sysctl", "sw_vers", "systeminfo",
+		"df", "du", "free", "top", "ps", "lsof",
+		"networksetup", "ifconfig", "ping", "traceroute", "nslookup", "dig",
+		"defaults read", "xcodebuild -version", "xcode-select -p",
 	}
 
 	for _, safe := range safeCommands {

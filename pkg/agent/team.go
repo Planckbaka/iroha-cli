@@ -626,9 +626,7 @@ func (tm *TeamManager) StopTeammateProcess(name string) {
 		delete(tm.watchdogs, name)
 	}
 
-	if _, active := tm.activeLoops[name]; active {
-		delete(tm.activeLoops, name)
-	}
+	delete(tm.activeLoops, name)
 
 	if t, ok := tm.teammates[name]; ok {
 		t.Status = "offline"

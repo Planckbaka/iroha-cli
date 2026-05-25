@@ -149,7 +149,6 @@ type CustomRunner struct {
 	BaseURL         string
 	APIFormat       llm.APIFormat
 	GenkitRegistry  *genkit.Genkit
-
 }
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
@@ -479,10 +478,10 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 			}
 		}
 
-			// Fire HookSessionEnd before signaling completion
-			GlobalHookManager.RunHooks(HookSessionEnd, HookContext{
-				SessionID: sessionID,
-			})
+		// Fire HookSessionEnd before signaling completion
+		GlobalHookManager.RunHooks(HookSessionEnd, HookContext{
+			SessionID: sessionID,
+		})
 
 		onDone()
 	}()
@@ -867,12 +866,12 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 			"args":        args,
 			"duration_ms": durationMS,
 		})
-			// Fire HookToolError when a tool execution fails
-			GlobalHookManager.RunHooks(HookToolError, HookContext{
-				ToolName:  b.Name(),
-				ToolInput: args,
-				ToolError: err.Error(),
-			})
+		// Fire HookToolError when a tool execution fails
+		GlobalHookManager.RunHooks(HookToolError, HookContext{
+			ToolName:  b.Name(),
+			ToolInput: args,
+			ToolError: err.Error(),
+		})
 		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,

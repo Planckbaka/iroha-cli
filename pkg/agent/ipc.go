@@ -13,11 +13,11 @@ import (
 
 // IPCMessage wraps a message for inter-process communication.
 type IPCMessage struct {
-	Type    string          `json:"type"`  // "message", "task_assign", "task_complete", "shutdown", "heartbeat", "heartbeat_ack"
-	From    string          `json:"from"`  // sender agent name
-	To      string          `json:"to"`    // recipient agent name
+	Type    string          `json:"type"` // "message", "task_assign", "task_complete", "shutdown", "heartbeat", "heartbeat_ack"
+	From    string          `json:"from"` // sender agent name
+	To      string          `json:"to"`   // recipient agent name
 	Payload json.RawMessage `json:"payload"`
-	ID      string          `json:"id"`    // unique message ID for tracking
+	ID      string          `json:"id"` // unique message ID for tracking
 }
 
 // IPCBridge manages Unix domain socket communication between processes.
