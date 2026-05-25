@@ -226,7 +226,7 @@ func (s *PersistentSessionService) SaveSession(ctx context.Context, sess session
 	}
 
 	filePath := filepath.Join(s.sessionsDir, sess.ID()+".json")
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		LogError(CatSession, "session_write_failed", fmt.Sprintf("Failed to write session file to path: %s", filePath), err, map[string]any{"session_id": sess.ID(), "path": filePath})
 		return err
 	}
@@ -295,7 +295,12 @@ func (s *PersistentSessionService) LoadSessions(ctx context.Context) error {
 
 		// Append events in order
 		for _, ev := range serialized.Events {
-			_ = s.delegate.AppendEvent(ctx, res.Session, ev)
+			if err := s.delegate.AppendEvent(ctx, res.Session, ev); err != nil {
+				LogWarn(CatSession, "session_event_append_failed", fmt.Sprintf("Failed to append event to session '%s' during load", serialized.ID), map[string]any{
+					"session_id": serialized.ID,
+					"error":      err.Error(),
+				})
+			}
 		}
 		loadedCount++
 	}
@@ -344,26 +349,12 @@ func (s *PersistentSessionService) ListSavedSessions() ([]SessionMetadata, error
 
 		// Use persisted totals if available (Phase 4.4), otherwise estimate from text length.
 		totalTokens := serialized.TotalTokens
-		totalCost := serialized.TotalCost
 		if totalTokens == 0 {
-			totalTextLen := 0
-			for _, ev := range serialized.Events {
-				if ev == nil {
-					continue
-				}
-				if ev.Content != nil {
-					for _, part := range ev.Content.Parts {
-						totalTextLen += len(part.Text)
-					}
-				}
-				if ev.LLMResponse.Content != nil {
-					for _, part := range ev.LLMResponse.Content.Parts {
-						totalTextLen += len(part.Text)
-					}
-				}
-			}
-			totalTokens = totalTextLen / 4
-			totalCost = float64(totalTokens) * 2.0 / 1000000.0 // Baseline estimate: $2.00 per million tokens
+			totalTokens = estimateTokens(estimateEventTextLen(serialized.Events))
+		}
+		totalCost := serialized.TotalCost
+		if totalCost == 0 {
+			totalCost = estimateCost(totalTokens)
 		}
 
 		metaList = append(metaList, SessionMetadata{
@@ -415,7 +406,7 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 		LogError(CatSession, "session_fork_failed", "Failed to marshal cloned session during fork", err, map[string]any{"original_id": originalID, "new_id": newID})
 		return err
 	}
-	if err := os.WriteFile(clonedPath, clonedData, 0644); err != nil {
+	if err := os.WriteFile(clonedPath, clonedData, 0600); err != nil {
 		LogError(CatSession, "session_fork_failed", fmt.Sprintf("Failed to write cloned session file: %s", clonedPath), err, map[string]any{"original_id": originalID, "new_id": newID, "cloned_path": clonedPath})
 		return err
 	}
@@ -433,7 +424,13 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 	}
 
 	for _, ev := range serialized.Events {
-		_ = s.delegate.AppendEvent(ctx, res.Session, ev)
+		if err := s.delegate.AppendEvent(ctx, res.Session, ev); err != nil {
+			LogWarn(CatSession, "session_fork_event_failed", fmt.Sprintf("Failed to append event during fork of '%s'", originalID), map[string]any{
+				"original_id": originalID,
+				"new_id":      newID,
+				"error":       err.Error(),
+			})
+		}
 	}
 
 	LogAudit(CatSession, "session_fork", fmt.Sprintf("Successfully forked session '%s' into '%s'", originalID, newID), map[string]any{
@@ -441,6 +438,42 @@ func (s *PersistentSessionService) ForkSession(ctx context.Context, originalID s
 		"new_id":      newID,
 	})
 	return nil
+}
+
+// estimateTokens returns a rough token count from text length.
+// Uses ~4 chars per token (English text approximation).
+func estimateTokens(textLen int) int {
+	if textLen <= 0 {
+		return 0
+	}
+	return textLen / 4
+}
+
+// estimateCost returns a rough USD cost from token count.
+// Uses $2.00 per million tokens as baseline.
+func estimateCost(tokens int) float64 {
+	return float64(tokens) * 2.0 / 1000000.0
+}
+
+// estimateEventTextLen sums text length across all events.
+func estimateEventTextLen(events []*session.Event) int {
+	total := 0
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if ev.Content != nil {
+			for _, part := range ev.Content.Parts {
+				total += len(part.Text)
+			}
+		}
+		if ev.LLMResponse.Content != nil {
+			for _, part := range ev.LLMResponse.Content.Parts {
+				total += len(part.Text)
+			}
+		}
+	}
+	return total
 }
 
 // getFirstPrompt returns the first user message text as the session title.

@@ -42,7 +42,7 @@ func (rl *rateLimiter) Allow() bool {
 	cutoff := now.Add(-rl.window)
 
 	// Trim old entries
-	valid := rl.requests[:0]
+	var valid []time.Time
 	for _, t := range rl.requests {
 		if t.After(cutoff) {
 			valid = append(valid, t)

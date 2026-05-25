@@ -117,7 +117,7 @@ func (mm *MemoryManager) load() {
 						oldFile := filepath.Join(globalGoClaudeDir, f.Name())
 						newFile := filepath.Join(globalIrohaDir, f.Name())
 						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
-							_ = os.WriteFile(newFile, data, 0644)
+							_ = os.WriteFile(newFile, data, 0600)
 						}
 					}
 					_ = os.Rename(globalGoClaudeDir, globalGoClaudeDir+".bak")
@@ -138,7 +138,7 @@ func (mm *MemoryManager) load() {
 						oldFile := filepath.Join(projectGoClaudeDir, f.Name())
 						newFile := filepath.Join(projectIrohaDir, f.Name())
 						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
-							_ = os.WriteFile(newFile, data, 0644)
+							_ = os.WriteFile(newFile, data, 0600)
 						}
 					}
 					_ = os.Rename(projectGoClaudeDir, projectGoClaudeDir+".bak")
@@ -236,7 +236,7 @@ func (mm *MemoryManager) Save(name, description string, memType MemoryType, cont
 
 	filePath := filepath.Join(saveDir, filename)
 	text := renderFrontmatter(entry)
-	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(text), 0600); err != nil {
 		errWrap := fmt.Errorf("cannot write memory file: %w", err)
 		LogError(CatSession, "memory_write_failed", fmt.Sprintf("Failed to write memory file: %s", filePath), errWrap, map[string]any{"path": filePath, "name": name})
 		return errWrap
@@ -398,7 +398,7 @@ func (mm *MemoryManager) rebuildIndex(dir string) {
 	for _, e := range mm.entries {
 		lines = append(lines, fmt.Sprintf("- %s: %s [%s]", e.Name, e.Description, e.Type))
 	}
-	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }
 
 // ── Frontmatter helpers ────────────────────────────────────────────────────
@@ -558,7 +558,7 @@ func (mm *MemoryManager) Update(name, description string, memType MemoryType, co
 
 	filePath := filepath.Join(saveDir, filename)
 	text := renderFrontmatter(entry)
-	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(text), 0600); err != nil {
 		errWrap := fmt.Errorf("cannot write memory file: %w", err)
 		LogError(CatSession, "memory_update_write_failed", fmt.Sprintf("Failed to write updated memory file: %s", filePath), errWrap, map[string]any{"path": filePath, "name": name})
 		return errWrap

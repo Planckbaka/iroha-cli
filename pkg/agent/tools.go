@@ -72,7 +72,7 @@ func validateSandboxPath(ctx context.Context, rawPath string) error {
 	cleanCWD := filepath.Clean(cwd)
 	cleanAbs := filepath.Clean(absPath)
 
-	if !strings.HasPrefix(cleanAbs, cleanCWD) {
+	if cleanAbs != cleanCWD && !strings.HasPrefix(cleanAbs, cleanCWD+string(os.PathSeparator)) {
 		return fmt.Errorf("security sandbox blocked: path '%s' is outside the workspace root '%s'", rawPath, cleanCWD)
 	}
 	return nil
