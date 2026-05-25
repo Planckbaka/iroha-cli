@@ -17,7 +17,7 @@ func TestWrapToolError(t *testing.T) {
 	if !errors.Is(wrapped, os.ErrNotExist) {
 		t.Errorf("expected wrapped error to retain os.ErrNotExist")
 	}
-	if !contains(wrapped.Error(), "自我修复建议") || !contains(wrapped.Error(), "拼写错误") {
+	if !contains(wrapped.Error(), "Self-repair suggestion") || !contains(wrapped.Error(), "typo") {
 		t.Errorf("expected wrapped error to contain self-correction suggestions for not exist, got: %s", wrapped.Error())
 	}
 
@@ -30,14 +30,14 @@ func TestWrapToolError(t *testing.T) {
 	if !errors.Is(wrappedPerm, os.ErrPermission) {
 		t.Errorf("expected wrapped error to retain os.ErrPermission")
 	}
-	if !contains(wrappedPerm.Error(), "读写权限") {
+	if !contains(wrappedPerm.Error(), "read/write permission") {
 		t.Errorf("expected wrapped error to contain permission suggestions, got: %s", wrappedPerm.Error())
 	}
 
 	// 3. Test shell_run exit code failed wrapping
 	errCmd := fmt.Errorf("command exited with 127")
 	wrappedCmd := WrapToolError("shell_run", "go test", errCmd)
-	if !contains(wrappedCmd.Error(), "本地开发环境") {
+	if !contains(wrappedCmd.Error(), "local development environment") {
 		t.Errorf("expected wrapped shell_run error to contain dependency environment advice, got: %s", wrappedCmd.Error())
 	}
 }

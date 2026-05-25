@@ -252,7 +252,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 		reqBytes, err := json.Marshal(glmReq)
 		if err != nil {
-			if !yield(nil, fmt.Errorf("序列化 GLM 请求失败: %w", err)) {
+			if !yield(nil, fmt.Errorf("failed to serialize GLM request: %w", err)) {
 				return
 			}
 			return
@@ -286,7 +286,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 					delaySec = 1.0
 				}
 
-				warnMsg := fmt.Sprintf("\n⚠️  [网络异常] 正在尝试第 %d/%d 次自动重试，等待约 %.1f 秒...\n", attempt, maxRetries, delaySec)
+				warnMsg := fmt.Sprintf("\n⚠️  [Network Error] Retrying attempt %d/%d, waiting ~%.1f seconds...\n", attempt, maxRetries, delaySec)
 				if !yield(&model.LLMResponse{
 					Content: &genai.Content{
 						Role: "model",
@@ -312,7 +312,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 			httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(reqBytes))
 			if err != nil {
-				lastErr = fmt.Errorf("创建 HTTP 请求失败: %w", err)
+				lastErr = fmt.Errorf("failed to create HTTP request: %w", err)
 				continue
 			}
 
@@ -325,7 +325,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 
 			resp, err = client.Do(httpReq)
 			if err != nil {
-				lastErr = fmt.Errorf("调用大模型 API (%s) 失败: %w", g.modelName, err)
+				lastErr = fmt.Errorf("LLM API call (%s) failed: %w", g.modelName, err)
 				continue
 			}
 
@@ -334,7 +334,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				_ = resp.Body.Close()
 
 				isTransient := resp.StatusCode == 429 || resp.StatusCode >= 500
-				lastErr = fmt.Errorf("大模型 API (%s) 返回错误码 %d: %s", g.modelName, resp.StatusCode, string(bodyBytes))
+				lastErr = fmt.Errorf("LLM API (%s) returned error code %d: %s", g.modelName, resp.StatusCode, string(bodyBytes))
 
 				if isTransient {
 					continue
@@ -375,7 +375,7 @@ func (g *OpenAICompatibleAdapter) GenerateContent(ctx context.Context, req *mode
 				if err == io.EOF {
 					break
 				}
-				if !yield(nil, fmt.Errorf("读取 API 响应流出错: %w", err)) {
+				if !yield(nil, fmt.Errorf("error reading API response stream: %w", err)) {
 					return
 				}
 				return

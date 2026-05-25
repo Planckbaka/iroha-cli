@@ -68,7 +68,7 @@ func TestPool_ValidateSandboxPath(t *testing.T) {
 		if err == nil {
 			t.Errorf("Expected path %q to trigger sandbox error, but it passed", unsafePath)
 		}
-		if !strings.Contains(err.Error(), "安全沙箱阻断") {
+		if !strings.Contains(err.Error(), "security sandbox blocked") {
 			t.Errorf("Expected sandbox error message, got: %v", err)
 		}
 	})

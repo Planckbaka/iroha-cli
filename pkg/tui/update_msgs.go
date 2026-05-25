@@ -25,6 +25,9 @@ func (m Model) handleCustomMsg(msg tea.Msg) (Model, tea.Cmd, bool) {
 
 		m.CurrentPrompt = msg.Prompt
 		m.StreamedText = ""
+		m.RenderedText = ""
+		m.PendingText = ""
+		m.LastRenderedLen = 0
 		m = m.transitionTo(stateThinking)
 		m.TextArea.SetValue("")
 		m.TextArea.SetHeight(2)
@@ -46,25 +49,32 @@ func (m Model) handleCustomMsg(msg tea.Msg) (Model, tea.Cmd, bool) {
 	case StreamTextMsg:
 		m = m.transitionTo(stateStreaming)
 		m.StreamedText += msg.Text
+		m.PendingText += msg.Text
 
-		// 解析 [status:xxx] 标签（取最后一个匹配）
+		// Parse [status:xxx] tags (use last match)
 		matches := statusTagRe.FindAllStringSubmatch(m.StreamedText, -1)
 		if len(matches) > 0 {
 			m.CurrentStatusText = matches[len(matches)-1][1]
 		}
 
-		m.Viewport.SetContent(m.renderViewportContent())
-		m.Viewport.GotoBottom()
+		// Incremental render: flush when enough text has accumulated or a newline arrives
+		if len(m.PendingText) > 50 || strings.Contains(msg.Text, "\n") {
+			m.renderIncremental()
+		} else {
+			// Lightweight update: just show pending text without a Glamour pass
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+		}
 		return m, nil, true
 
 	case ToolStatusMsg:
 		status := msg.Status
 
-		// 处理流式输出行（仅 shell_run）
+		// Process streaming output lines (shell_run only)
 		if status.Running && len(status.StreamLines) > 0 {
 			m.ShellOutputStreamLines = append(m.ShellOutputStreamLines, status.StreamLines...)
 			m.ShellStreamActive = true
-			// 节流：100ms 或累计 ≥5 行时才刷新 Viewport
+			// Throttle: refresh Viewport every 100ms or every 5 accumulated lines
 			now := time.Now()
 			if now.Sub(m.lastStreamUpdate) >= 100*time.Millisecond || len(m.ShellOutputStreamLines)%5 == 0 {
 				m.lastStreamUpdate = now
@@ -81,7 +91,7 @@ func (m Model) handleCustomMsg(msg tea.Msg) (Model, tea.Cmd, bool) {
 			}
 		} else {
 			m.ActiveTool = agent.ToolStatus{}
-			// 清空流式输出区域
+			// Clear streaming output area
 			m.ShellOutputStreamLines = nil
 			m.ShellStreamActive = false
 			var logLine string
@@ -105,13 +115,13 @@ func (m Model) handleCustomMsg(msg tea.Msg) (Model, tea.Cmd, bool) {
 		m.ConfirmationListenerActive = false
 
 		// Extract Unified Diff if present in prompt to avoid massive bloat in simple confirmation cards
-		const diffMarker = "\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n"
+		const diffMarker = "\n\n\x1b[1;34m[File Changes (Diff)]:\x1b[0m\n"
 		if idx := strings.Index(msg.Prompt, diffMarker); idx != -1 {
 			m.ConfirmationPrompt = msg.Prompt[:idx]
 			m.ConfirmDiffText = msg.Prompt[idx+len(diffMarker):]
 			m.ConfirmDiffActive = false
 		} else {
-			altMarker := "\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m"
+			altMarker := "\n\n\x1b[1;34m[File Changes (Diff)]:\x1b[0m"
 			if idx := strings.Index(msg.Prompt, altMarker); idx != -1 {
 				m.ConfirmationPrompt = msg.Prompt[:idx]
 				m.ConfirmDiffText = msg.Prompt[idx+len(altMarker):]

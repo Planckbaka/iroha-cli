@@ -44,7 +44,7 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 	// Header
 	sb.WriteString(lipgloss.NewStyle().
 		Foreground(ColorWarning).Bold(true).
-		Render("需要您的授权") + "\n\n")
+		Render("Authorization Required") + "\n\n")
 
 	// Prompt content
 	sb.WriteString(prompt)
@@ -64,20 +64,20 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 	}
 
 	sb.WriteString("  ")
-	sb.WriteString(yStyle.Render("Y 同意"))
+	sb.WriteString(yStyle.Render("Y Allow"))
 	sb.WriteString("  ")
-	sb.WriteString(nStyle.Render("N 拒绝"))
+	sb.WriteString(nStyle.Render("N Deny"))
 	sb.WriteString("  ")
-	sb.WriteString(aStyle.Render("A 始终允许"))
+	sb.WriteString(aStyle.Render("A Always Allow"))
 
 	sb.WriteString("\n\n")
 
-	hints := "←→ / Tab 选择   Enter 确认   快捷键: Y/N/A"
+	hints := "<- -> / Tab select   Enter confirm   Shortcuts: Y/N/A"
 	if hasDiff {
 		if diffActive {
-			hints += "   [D] 收起改动差异 (Hide Diff)"
+			hints += "   [D] Hide Diff"
 		} else {
-			hints += "   [D] 展开改动差异 (Show Diff)"
+			hints += "   [D] Show Diff"
 		}
 	}
 	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(hints))
@@ -114,13 +114,13 @@ func RenderWelcomeCard(runner *agent.CustomRunner) string {
 	sb.WriteString(pink("  |___| |_| \\_\\  \\___/  |_| |_/_/   \\_\\") + "\n\n")
 
 	// Energetic part-time student girl welcoming msg
-	welcomeMsg := pink("[Iroha] ") + lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Render("呼……刚结束打工！今天也来帮你写代码啦，我们开始吧！")
+	welcomeMsg := pink("[Iroha] ") + lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Render("Phew, just finished my shift! Let's write some code together, shall we?")
 	sb.WriteString("  " + welcomeMsg + "\n\n")
 
 	sb.WriteString("  " + StyleKeyHelp.Render("brand  ") + StylePrompt.Render("iroha code") + "  " + StyleKeyHelp.Render("v1.3.0") + "\n")
 	sb.WriteString("  " + StyleKeyHelp.Render("model  ") + StylePrompt.Render(modelName) + "\n")
 	sb.WriteString("  " + StyleKeyHelp.Render("mode   ") + StylePrompt.Render(modeStr) + "\n\n")
-	sb.WriteString("  " + StyleKeyHelp.Render("输入 / 查看所有命令   Up/Down — 历史记录   /exit — 退出") + "\n")
+	sb.WriteString("  " + StyleKeyHelp.Render("Type / to see all commands   Up/Down - History   /exit - Quit") + "\n")
 
 	return StyleWelcome.Render(sb.String())
 }
@@ -164,10 +164,10 @@ func RenderSlashMenu(items []SlashMenuItem, selectedIndex int, width int) string
 	}
 
 	if len(items) > 8 {
-		sb.WriteString("  " + StyleKeyHelp.Render(fmt.Sprintf("... 还有 %d 个命令", len(items)-8)) + "\n")
+		sb.WriteString("  " + StyleKeyHelp.Render(fmt.Sprintf("... %d more commands", len(items)-8)) + "\n")
 	}
 
-	footer := StyleKeyHelp.Render("  ↑↓ 选择   Tab 补全   Enter 执行   Esc 关闭")
+	footer := StyleKeyHelp.Render("  Up/Down select   Tab complete   Enter execute   Esc close")
 	sb.WriteString(footer)
 
 	menuStyle := lipgloss.NewStyle().
@@ -185,9 +185,9 @@ var permModeNames = []struct {
 	Desc  string
 	Icon  string
 }{
-	{agent.ModePlan, "Plan Mode", "只读模式 — 拦截所有写操作与 Shell 命令", ""},
-	{agent.ModeDefault, "Default Mode", "每次敏感操作需用户手动授权（推荐）", ""},
-	{agent.ModeAuto, "Auto Mode", "读操作自动放行，写操作仍需授权", ""},
+	{agent.ModePlan, "Plan Mode", "Read-only mode - blocks all write operations and Shell commands", ""},
+	{agent.ModeDefault, "Default Mode", "Every sensitive operation requires manual user approval (recommended)", ""},
+	{agent.ModeAuto, "Auto Mode", "Read operations auto-approved, write operations still require approval", ""},
 }
 
 // RenderPermissionSelectScreen renders the full-screen startup permission selection
@@ -196,9 +196,9 @@ func RenderPermissionSelectScreen(m Model) string {
 
 	sb.WriteString("\n\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).
-		Render("  选择 Agent 权限模式") + "\n\n")
+		Render("  Select Agent Permission Mode") + "\n\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
-		Render("  此设置控制 Agent 执行工具时的安全级别") + "\n\n")
+		Render("  This setting controls the security level for Agent tool execution") + "\n\n")
 
 	for i, entry := range permModeNames {
 		var line string
@@ -217,7 +217,7 @@ func RenderPermissionSelectScreen(m Model) string {
 	}
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
-		Render("  ↑↓ 选择   Enter 确认   Ctrl+C 退出") + "\n")
+		Render("  Up/Down select   Enter confirm   Ctrl+C exit") + "\n")
 
 	return sb.String()
 }
@@ -228,20 +228,20 @@ func RenderSessionSelectScreen(m Model) string {
 
 	sb.WriteString("\n\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).
-		Render("  Iroha Code — 会话历史管理器") + "\n\n")
+		Render("  Iroha Code - Session History Manager") + "\n\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
-		Render("  请选择要恢复的会话，或者启动一个新的会话：") + "\n\n")
+		Render("  Select a session to resume, or start a new session:") + "\n\n")
 
 	// Render virtual "[Start New Session]" entry
 	var line string
 	if m.SessionListIndex == 0 {
 		pointer := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("▶ ")
-		label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render("[ 启动全新会话 ]")
-		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render("开启一个没有历史记忆的全新独立会话。")
+		label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render("[ Start New Session ]")
+		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render("Start a fresh session with no history.")
 		line = "  " + pointer + label + "\n     " + desc
 	} else {
-		label := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("[ 启动全新会话 ]")
-		desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render("开启一个没有历史记忆的全新独立会话。")
+		label := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("[ Start New Session ]")
+		desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render("Start a fresh session with no history.")
 		line = "     " + label + "  " + desc
 	}
 	sb.WriteString(line + "\n\n")
@@ -252,7 +252,7 @@ func RenderSessionSelectScreen(m Model) string {
 		isActive := sess.ID == m.SessionID
 		activeTag := ""
 		if isActive {
-			activeTag = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" (当前活跃)")
+			activeTag = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" (active)")
 		}
 
 		timeStr := sess.LastUpdateTime.Format("2006-01-02 15:04:05")
@@ -287,7 +287,7 @@ func RenderSessionSelectScreen(m Model) string {
 			pointer := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("▶ ")
 			label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render(sess.FirstPrompt)
 			desc := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Render(
-				fmt.Sprintf("ID: %s  更新时间: %s  路径: %s%s%s", sess.ID, timeStr, sess.CWD, activeTag, statsStr))
+				fmt.Sprintf("ID: %s  Updated: %s  Path: %s%s%s", sess.ID, timeStr, sess.CWD, activeTag, statsStr))
 			line = "  " + pointer + label + "\n     " + desc
 		} else {
 			labelStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
@@ -296,14 +296,14 @@ func RenderSessionSelectScreen(m Model) string {
 			}
 			label := labelStyle.Render(sess.FirstPrompt)
 			desc := lipgloss.NewStyle().Foreground(ColorTextMuted).Render(
-				fmt.Sprintf("更新时间: %s  路径: %s%s%s", timeStr, sess.CWD, activeTag, statsStr))
+				fmt.Sprintf("Updated: %s  Path: %s%s%s", timeStr, sess.CWD, activeTag, statsStr))
 			line = "     " + label + "\n     " + desc
 		}
 		sb.WriteString(line + "\n\n")
 	}
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).
-		Render("  ↑↓ 选择   Enter 确认   Esc 返回   Ctrl+C 退出") + "\n")
+		Render("  Up/Down select   Enter confirm   Esc back   Ctrl+C exit") + "\n")
 
 	return sb.String()
 }
@@ -311,7 +311,7 @@ func RenderSessionSelectScreen(m Model) string {
 // RenderPermissionSelect renders an inline permission selection card (used after /permission command)
 func RenderPermissionSelect(currentMode agent.PermissionMode) string {
 	var sb strings.Builder
-	sb.WriteString(StyleKeyActive.Render("权限模式选择") + "\n\n")
+	sb.WriteString(StyleKeyActive.Render("Permission Mode Select") + "\n\n")
 
 	for i, entry := range permModeNames {
 		marker := "  "
@@ -328,7 +328,7 @@ func RenderPermissionSelect(currentMode agent.PermissionMode) string {
 		))
 	}
 
-	sb.WriteString("\n" + StyleKeyHelp.Render("  ↑↓ 选择   Enter 确认"))
+	sb.WriteString("\n" + StyleKeyHelp.Render("  Up/Down select   Enter confirm"))
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -338,7 +338,7 @@ func RenderPermissionSelect(currentMode agent.PermissionMode) string {
 		Render(sb.String())
 }
 
-// RenderTodoDashboard renders the task checklist — hidden by default when empty
+// RenderTodoDashboard renders the task checklist - hidden by default when empty
 func RenderTodoDashboard() string {
 	todoRender := agent.GlobalTodoManager.Render()
 	if todoRender == "" {
@@ -502,26 +502,26 @@ func RenderErrorCard(err error) string {
 	errMsg := err.Error()
 
 	var tips []string
-	if strings.Contains(errMsg, "API") || strings.Contains(errMsg, "Authorization") || strings.Contains(errMsg, "ApiKey") || strings.Contains(errMsg, "接口") || strings.Contains(errMsg, "http") || strings.Contains(errMsg, "调用") {
+	if strings.Contains(errMsg, "API") || strings.Contains(errMsg, "Authorization") || strings.Contains(errMsg, "ApiKey") || strings.Contains(errMsg, "接口") || strings.Contains(errMsg, "http") || strings.Contains(errMsg, "调用") || strings.Contains(errMsg, "call") {
 		tips = []string{
-			"请检查您的本地网络连接以及 API 终点（Base URL）是否可达",
-			"确认您已在 ~/.iroha.json 或环境变量中配置了正确的 API Key",
-			"如果您想进行离线只读操作，可以通过输入 /mode plan 切换为只读规划模式",
+			"Please check your local network connection and whether the API endpoint (Base URL) is reachable",
+			"Confirm you have configured the correct API Key in ~/.iroha.json or environment variables",
+			"If you want offline read-only operations, switch to Plan mode by typing /mode plan",
 		}
 	} else if strings.Contains(errMsg, "权限") || strings.Contains(errMsg, "Permission") || strings.Contains(errMsg, "denied") {
 		tips = []string{
-			"请检查您对目标目录或文件的系统读写权限",
-			"尽量把代码修改与测试命令限制在当前工作区目录内运行",
+			"Please check your system read/write permissions for the target directory or file",
+			"Try to keep code changes and test commands within the current workspace directory",
 		}
 	} else {
 		tips = []string{
-			"检查您的底层命令行工具或本地 Go 环境是否正确配置",
-			"您可以重新输入指令或者尝试更换别的命令参数重新执行",
+			"Check if your command-line tools or local Go environment are configured correctly",
+			"You can re-enter the command or try different parameters",
 		}
 	}
 
 	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("[error]") + " " + errMsg + "\n\n")
-	sb.WriteString("  " + StyleKeyHelp.Render("建议排查:") + "\n")
+	sb.WriteString("  " + StyleKeyHelp.Render("Troubleshooting:") + "\n")
 	for i, tip := range tips {
 		sb.WriteString(fmt.Sprintf("    %d. %s\n", i+1, StyleKeyHelp.Render(tip)))
 	}
@@ -568,7 +568,7 @@ func FormatToolArgs(args any) string {
 	return fmt.Sprintf("%v", args)
 }
 
-// FormatToolActivity converts a tool name and arguments into a clear, elegant Chinese action description
+// FormatToolActivity converts a tool name and arguments into a clear action description
 func FormatToolActivity(name string, args any) string {
 	var argMap map[string]any
 	if m, ok := args.(map[string]any); ok {
@@ -594,115 +594,115 @@ func FormatToolActivity(name string, args any) string {
 	case "file_read":
 		path := getStr("path", "AbsolutePath", "TargetFile")
 		if path != "" {
-			return fmt.Sprintf("读取文件 %s", path)
+			return fmt.Sprintf("Read file %s", path)
 		}
-		return "读取文件"
+		return "Read file"
 	case "file_write":
 		path := getStr("path", "TargetFile", "AbsolutePath")
 		if path != "" {
-			return fmt.Sprintf("写入文件 %s", path)
+			return fmt.Sprintf("Write file %s", path)
 		}
-		return "写入文件"
+		return "Write file"
 	case "grep":
 		pattern := getStr("pattern", "query", "Query")
 		if pattern != "" {
-			return fmt.Sprintf("搜索关键字/正则 %q", pattern)
+			return fmt.Sprintf("Search pattern/regex %q", pattern)
 		}
-		return "搜索文件内容"
+		return "Search file contents"
 	case "shell_run":
 		cmd := getStr("command", "CommandLine")
 		if cmd != "" {
-			return fmt.Sprintf("运行终端命令: %s", cmd)
+			return fmt.Sprintf("Run terminal command: %s", cmd)
 		}
-		return "运行终端命令"
+		return "Run terminal command"
 	case "todo":
 		text := getStr("text", "Text")
 		if text != "" {
-			return fmt.Sprintf("更新待办事项 %q", text)
+			return fmt.Sprintf("Update todo %q", text)
 		}
-		return "更新待办事项"
+		return "Update todo"
 	case "memory_save":
 		nameVal := getStr("name", "Name")
 		if nameVal != "" {
-			return fmt.Sprintf("保存跨会话记忆 %q", nameVal)
+			return fmt.Sprintf("Save cross-session memory %q", nameVal)
 		}
-		return "保存跨会话记忆"
+		return "Save cross-session memory"
 	case "memory_list":
-		return "获取跨会话记忆列表"
+		return "List cross-session memories"
 	case "task_create":
 		id := getStr("id", "ID", "TaskId")
 		if id != "" {
-			return fmt.Sprintf("创建工作链任务 %s", id)
+			return fmt.Sprintf("Create task %s", id)
 		}
-		return "创建工作链任务"
+		return "Create task"
 	case "task_update":
 		id := getStr("id", "ID", "TaskId")
 		if id != "" {
-			return fmt.Sprintf("更新工作链任务 %s", id)
+			return fmt.Sprintf("Update task %s", id)
 		}
-		return "更新工作链任务"
+		return "Update task"
 	case "task_list":
-		return "查看工作链任务列表"
+		return "List tasks"
 	case "task_get":
 		id := getStr("id", "ID", "TaskId")
 		if id != "" {
-			return fmt.Sprintf("获取工作链任务 %s 详情", id)
+			return fmt.Sprintf("Get task %s details", id)
 		}
-		return "获取工作链任务详情"
+		return "Get task details"
 	case "background_run":
 		cmd := getStr("command", "CommandLine")
 		if cmd != "" {
-			return fmt.Sprintf("后台启动终端命令: %s", cmd)
+			return fmt.Sprintf("Run background command: %s", cmd)
 		}
-		return "后台启动终端命令"
+		return "Run background command"
 	case "check_background":
-		return "检查后台运行任务"
+		return "Check background tasks"
 	case "schedule_create":
-		return "创建计划任务/定时器"
+		return "Create scheduled task"
 	case "schedule_list":
-		return "查看活动计划任务列表"
+		return "List scheduled tasks"
 	case "schedule_delete":
-		return "删除计划任务/定时器"
+		return "Delete scheduled task"
 	case "spawn_teammate":
 		nameVal := getStr("name", "Name")
 		if nameVal != "" {
-			return fmt.Sprintf("生成子 Agent 协同体 %s", nameVal)
+			return fmt.Sprintf("Spawn agent teammate %s", nameVal)
 		}
-		return "生成子 Agent 协同体"
+		return "Spawn agent teammate"
 	case "list_teammates":
-		return "检查协同 Agent 团队状态"
+		return "Check agent team status"
 	case "send_message":
 		recipient := getStr("recipient", "Recipient")
 		if recipient != "" {
-			return fmt.Sprintf("向 Agent %s 发送消息", recipient)
+			return fmt.Sprintf("Send message to agent %s", recipient)
 		}
-		return "向协同 Agent 发送消息"
+		return "Send message to agent team"
 	case "read_inbox":
-		return "读取协同 Agent 收件箱"
+		return "Read agent inbox"
 	case "broadcast":
-		return "广播消息给协同 Agent 团队"
+		return "Broadcast to agent team"
 	case "worktree_create":
 		nameVal := getStr("name", "Name")
 		if nameVal != "" {
-			return fmt.Sprintf("创建 Git 工作区隔离树 %s", nameVal)
+			return fmt.Sprintf("Create git worktree %s", nameVal)
 		}
-		return "创建 Git 工作区隔离树"
+		return "Create git worktree"
 	case "worktree_list":
-		return "查看 Git 工作区隔离树列表"
+		return "List git worktrees"
 	case "worktree_status":
-		return "检查 Git 工作区隔离树状态"
+		return "Check git worktree status"
 	case "worktree_enter":
-		return "切入 Git 工作区隔离区"
+		return "Enter git worktree"
 	case "worktree_closeout":
-		return "关闭/清理 Git 工作区隔离区"
+		return "Close/clean up git worktree"
 	case "mcp_server_list":
-		return "列出已配置的 MCP 服务插件"
+		return "List configured MCP servers"
 	default:
 		argsStr := FormatToolArgs(args)
 		if argsStr != "" {
-			return fmt.Sprintf("调用工具 %s%s", name, argsStr)
+			return fmt.Sprintf("Call tool %s%s", name, argsStr)
 		}
-		return fmt.Sprintf("调用工具 %s", name)
+		return fmt.Sprintf("Call tool %s", name)
 	}
 }
 
@@ -735,7 +735,7 @@ func RenderShellStreamArea(lines []string, cmd string, width int) string {
 
 	if truncated > 0 {
 		sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).
-			Render(fmt.Sprintf("  ... (已截断前 %d 行)", truncated)))
+			Render(fmt.Sprintf("  ... (truncated %d earlier lines)", truncated)))
 		sb.WriteString("\n")
 	}
 
@@ -784,7 +784,7 @@ func RenderToolSuccessCard(name string, args any, duration time.Duration) string
 func RenderTeamDashboard() string {
 	teammates, err := agent.GlobalTeamManager.ListTeammates()
 	if err != nil {
-		return StyleToolError.Render(fmt.Sprintf("[error] 获取队友列表失败: %v", err))
+		return StyleToolError.Render(fmt.Sprintf("[error] Failed to list teammates: %v", err))
 	}
 
 	var sb strings.Builder
@@ -823,7 +823,7 @@ func RenderTeamDashboard() string {
 func RenderWorktreeDashboard() string {
 	worktrees, err := agent.GlobalWorktreeManager.List()
 	if err != nil {
-		return StyleToolError.Render(fmt.Sprintf("[error] 获取 Worktree 列表失败: %v", err))
+		return StyleToolError.Render(fmt.Sprintf("[error] Failed to list worktrees: %v", err))
 	}
 
 	var sb strings.Builder
@@ -952,7 +952,7 @@ func RenderStatusBar(m Model) string {
 	// Left: agent action + duration
 	var left string
 	if m.CurrentStatusText != "" && (m.State == stateThinking || m.State == stateStreaming) {
-		// 优先显示 LLM status 标签文字
+		// Prefer displaying LLM status tag text
 		left = fmt.Sprintf("  [thinking] %s", m.CurrentStatusText)
 	} else if m.ActiveTool.Running {
 		dur := time.Since(m.RoundStartTime).Round(time.Millisecond)
@@ -963,7 +963,7 @@ func RenderStatusBar(m Model) string {
 		left = fmt.Sprintf("  [tool] %s (%v)", activity, dur)
 	} else if m.State == stateThinking || m.State == stateStreaming {
 		dur := time.Since(m.RoundStartTime).Round(time.Second)
-		left = fmt.Sprintf("  [thinking] 思考中... (%v)", dur)
+		left = fmt.Sprintf("  [thinking] thinking... (%v)", dur)
 	} else {
 		left = fmt.Sprintf("  mode:%s", modeStr)
 	}
@@ -1016,7 +1016,7 @@ func RenderPathCompletionBar(items []string, selectedIndex int, width int) strin
 	stylePrefix := lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true)
 
 	var builder strings.Builder
-	builder.WriteString(stylePrefix.Render("  候选: "))
+	builder.WriteString(stylePrefix.Render("  Candidates: "))
 
 	var itemStrings []string
 	for i, item := range items {
@@ -1029,11 +1029,11 @@ func RenderPathCompletionBar(items []string, selectedIndex int, width int) strin
 
 	// Dynamic truncation to prevent terminal line folding
 	candidatesStr := strings.Join(itemStrings, "   ")
-	totalLen := lipgloss.Width(stylePrefix.Render("  候选: ")) + lipgloss.Width(candidatesStr)
+	totalLen := lipgloss.Width(stylePrefix.Render("  Candidates: ")) + lipgloss.Width(candidatesStr)
 
 	if totalLen > width && width > 20 {
 		limit := width
-		currentLen := lipgloss.Width(stylePrefix.Render("  候选: "))
+		currentLen := lipgloss.Width(stylePrefix.Render("  Candidates: "))
 		var truncated []string
 
 		for i, itemStr := range itemStrings {
@@ -1059,9 +1059,9 @@ func RenderPathCompletionBar(items []string, selectedIndex int, width int) strin
 // RenderCancelCard renders a premium cancellation card when an operation is aborted
 func RenderCancelCard(duration time.Duration) string {
 	var sb strings.Builder
-	sb.WriteString("⚠️  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("会话已被用户中止 (Generation Aborted)") + "\n\n")
-	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render(fmt.Sprintf("    • 运行持续时间 :  %s\n", duration.Round(time.Millisecond))))
-	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("    • 中断完成时间 :  " + time.Now().Format("15:04:05") + "\n"))
+	sb.WriteString("⚠️  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("Session aborted by user (Generation Aborted)") + "\n\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render(fmt.Sprintf("    • Run duration   :  %s\n", duration.Round(time.Millisecond))))
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("    • Interrupted at :  " + time.Now().Format("15:04:05") + "\n"))
 
 	cardStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1077,23 +1077,23 @@ func RenderCancelCard(duration time.Duration) string {
 func RenderHelpDashboard() string {
 	var sb strings.Builder
 
-	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("💡 Iroha Code — 开发者使用指南 & 指令手册") + "\n")
+	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("💡 Iroha Code — Developer Guide & Command Reference") + "\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n\n")
 
 	// Keyboard Shortcuts section
-	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" ⌨️  键盘快捷键 (Keyboard Shortcuts)") + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" ⌨️  Keyboard Shortcuts") + "\n")
 
 	shortcuts := []struct {
 		Keys string
 		Desc string
 	}{
-		{"Ctrl + C", "中止当前正在进行的思考与工具调用，或退出空闲状态"},
-		{"Ctrl + Y", "复制最后一条 AI 响应到系统剪贴板"},
-		{"Ctrl + D / /exit", "安全保存并退出当前的会话交互"},
-		{"PageUp / PageDown", "在会话内容视窗中向上/向下滚动半页"},
-		{"Esc", "退出会话历史选择器或关闭斜杠指令自动补全补丁"},
-		{"↑ / ↓ (输入框为空时)", "调出或循环您之前输入过的 Prompt 历史命令"},
-		{"/ + 输入指令 (如/doc)", "触发自动指令补全，按 Tab 或 Enter 键选择确认"},
+		{"Ctrl + C", "Abort current thinking and tool calls, or exit idle state"},
+		{"Ctrl + Y", "Copy last AI response to system clipboard"},
+		{"Ctrl + D / /exit", "Safely save and exit current session"},
+		{"PageUp / PageDown", "Scroll up/down half a page in the viewport"},
+		{"Esc", "Exit session history picker or close slash command autocomplete"},
+		{"↑ / ↓ (empty input)", "Browse or cycle through prompt history"},
+		{" / + command (e.g. /doc)", "Trigger autocomplete, press Tab or Enter to select"},
 	}
 
 	for _, s := range shortcuts {
@@ -1104,14 +1104,14 @@ func RenderHelpDashboard() string {
 	sb.WriteString("\n")
 
 	// Slash Commands section
-	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" 🚀 斜杠快捷指令 (Slash Commands)") + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render(" 🚀 Slash Commands") + "\n")
 	for _, cmd := range AllSlashCommands {
 		sb.WriteString(fmt.Sprintf("    %-18s : %s\n",
 			lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(cmd.Command),
 			lipgloss.NewStyle().Foreground(ColorTextMuted).Render(cmd.Description)))
 	}
 
-	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" 🎉 输入提示词指引 Agent 吧！输入 /sessions 切换历史，输入 /doctor 诊断环境。") + "\n")
+	sb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(" 🎉 Type a prompt to guide the Agent! Type /sessions to switch history, /doctor to diagnose environment.") + "\n")
 	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 
 	cardStyle := lipgloss.NewStyle().

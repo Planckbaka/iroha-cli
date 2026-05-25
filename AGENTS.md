@@ -1,4 +1,4 @@
-<!-- Generated: 2026-05-23 | Updated: 2026-05-23 -->
+<!-- Generated: 2026-05-23 | Updated: 2026-05-25 -->
 
 # iroha-code
 
@@ -46,7 +46,7 @@ An interactive AI Agent CLI built in Go, powered by 7 LLM providers (GLM, OpenAI
 - Google ADK (`google.golang.org/adk`) for agent framework
 - Firebase Genkit (`github.com/firebase/genkit/go`) for Gemini/Claude SDK bridging
 - Charm stack (Bubble Tea, Lipgloss, Glamour, Bubbles) for TUI
-- Chinese-language user-facing strings throughout
+- English-language user-facing strings throughout (migrated from Chinese)
 
 ## Dependencies
 

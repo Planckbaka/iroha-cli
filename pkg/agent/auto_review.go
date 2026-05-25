@@ -35,19 +35,19 @@ func SetAutoReviewConfig(m model.LLM) {
 }
 
 // autoReviewSystemPrompt is the safety judge system instruction
-const autoReviewSystemPrompt = `你是一个严格的安全审查员，负责评估 Shell 命令是否安全。
-你的任务是判断一条 Shell 命令是否可以在用户的工作区安全执行，无需用户手动审批。
-
-判断标准：
-- SAFE（安全，可自动放行）：只读操作，例如 ls, pwd, cat, echo, git status, git log, go build, go test, find, grep, head, tail, wc, which, env
-- UNSAFE（危险，需要人工审核）：任何写入、删除、网络请求、系统修改、权限变更等操作
-
-回复格式必须严格为 JSON：
-{"safe": true, "reason": "只读查看目录，无风险"}
-或
-{"safe": false, "reason": "删除操作，可能造成数据丢失"}
-
-只返回 JSON，不要任何额外文字。`
+const autoReviewSystemPrompt = `You are a strict security reviewer responsible for evaluating whether Shell commands are safe.
+	Your task is to determine whether a Shell command can be safely executed in the user workspace without manual user approval.
+	
+	Judgment criteria:
+	- SAFE (safe, auto-approve): read-only operations, e.g. ls, pwd, cat, echo, git status, git log, go build, go test, find, grep, head, tail, wc, which, env
+	- UNSAFE (dangerous, requires human review): any write, delete, network request, system modification, permission change, etc.
+	
+	Response format must be strictly JSON:
+	{"safe": true, "reason": "Read-only directory listing, no risk"}
+	or
+	{"safe": false, "reason": "Delete operation, potential data loss"}
+	
+	Return only JSON, no additional text.`
 
 // ReviewCommand asks the configured LLM whether a shell command is safe,
 // but enforces a Hybrid Safety Guard: local heuristic safety rules act as an absolute
@@ -58,8 +58,8 @@ func ReviewCommand(cmd string) AutoReviewResult {
 
 	// A. If the heuristic review detects bypass tricks or dangerous patterns, we HARD REJECT immediately.
 	// We check this by seeing if heuristicReview returned Safe: false AND the reason indicates a hard rule block.
-	// Specifically, if heuristicResult is UNSAFE, and it's NOT because of "未知或自定义命令", then it's a hard block!
-	if !heuristicResult.Safe && !strings.Contains(heuristicResult.Reason, "未知或自定义命令") {
+	// Specifically, if heuristicResult is UNSAFE, and it is NOT because of "unknown or custom command", then it is a hard block!
+	if !heuristicResult.Safe && !strings.Contains(heuristicResult.Reason, "unknown or custom command") {
 		return heuristicResult
 	}
 
@@ -88,7 +88,7 @@ func ReviewCommand(cmd string) AutoReviewResult {
 		if strings.Contains(cmd, "\n") || strings.Contains(cmd, "\r") {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "安全熔断：LLM 判定命令安全，但本地校验检测到换行符或多行指令风险",
+				Reason: "Safety fuse: LLM judged command safe, but local check detected newline or multiline injection risk",
 			}
 		}
 
@@ -123,7 +123,7 @@ func ReviewCommand(cmd string) AutoReviewResult {
 		if hasDangerousPattern || isDangerousFind || hasBypass {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "安全熔断：LLM 判定命令安全，但本地校验检测到隐藏的危险模式或绕过风险",
+				Reason: "Safety fuse: LLM judged command safe, but local check detected hidden dangerous patterns or bypass risk",
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func callLLMForReview(ctx context.Context, cfg *autoReviewConfig, cmd string) (A
 			{
 				Role: "user",
 				Parts: []*genai.Part{
-					{Text: fmt.Sprintf("请审查以下 Shell 命令：\n```\n%s\n```", cmd)},
+					{Text: fmt.Sprintf("Please review the following Shell command:\n```\n%s\n```", cmd)},
 				},
 			},
 		},
@@ -169,7 +169,151 @@ func callLLMForReview(ctx context.Context, cfg *autoReviewConfig, cmd string) (A
 		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return AutoReviewResult{Safe: false, Reason: "AI 审查响应格式错误，交由人工确认"}, nil
+		return AutoReviewResult{Safe: false, Reason: "AI review response format error, deferring to human confirmation"}, nil
+	}
+
+	return AutoReviewResult{Safe: result.Safe, Reason: result.Reason}, nil
+}
+
+// ReviewFileOperation evaluates whether a file write/edit operation is safe.
+// Uses path-based heuristics first, then LLM semantic review for edge cases.
+func ReviewFileOperation(toolName, filePath, content string) AutoReviewResult {
+	// 1. Path-based heuristic review
+	heuristicResult := fileHeuristicReview(toolName, filePath, content)
+	if heuristicResult.Safe {
+		return heuristicResult
+	}
+	if !strings.Contains(heuristicResult.Reason, "needs semantic review") {
+		return heuristicResult
+	}
+
+	// 2. LLM semantic review for unknown patterns
+	if GlobalAutoReviewConfig == nil || GlobalAutoReviewConfig.Model == nil {
+		return AutoReviewResult{Safe: false, Reason: "No LLM reviewer configured, deferring to human confirmation"}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	llmResult, err := callLLMForFileReview(ctx, GlobalAutoReviewConfig, toolName, filePath, content)
+	if err != nil {
+		return AutoReviewResult{Safe: false, Reason: fmt.Sprintf("LLM review failed: %v", err)}
+	}
+
+	return llmResult
+}
+
+func fileHeuristicReview(toolName, filePath, content string) AutoReviewResult {
+	// Normalize path
+	normalized := strings.TrimSpace(filePath)
+
+	// Block writes outside workspace
+	if strings.HasPrefix(normalized, "/etc/") ||
+		strings.HasPrefix(normalized, "/usr/") ||
+		strings.HasPrefix(normalized, "/var/") ||
+		strings.HasPrefix(normalized, "/sys/") ||
+		strings.HasPrefix(normalized, "/proc/") ||
+		strings.HasPrefix(normalized, "/dev/") {
+		return AutoReviewResult{Safe: false, Reason: "System directory write blocked"}
+	}
+
+	// Block writes to sensitive files
+	base := strings.ToLower(normalized)
+	sensitivePatterns := []string{
+		".ssh/", ".gnupg/", ".aws/", ".env", "credentials",
+		"id_rsa", "id_ed25519", ".pem", ".key",
+		"~/.gitconfig", "~/.bashrc", "~/.zshrc", "~/.profile",
+	}
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(base, pattern) {
+			return AutoReviewResult{Safe: false, Reason: fmt.Sprintf("Sensitive path pattern detected: %s", pattern)}
+		}
+	}
+
+	// Block if content contains potential secrets
+	lowerContent := strings.ToLower(content)
+	secretIndicators := []string{
+		"password =", "password=", "secret_key =", "secret_key=",
+		"private_key =", "private_key=", "api_secret =", "api_secret=",
+		"-----begin rsa private key-----",
+		"-----begin private key-----",
+	}
+	for _, indicator := range secretIndicators {
+		if strings.Contains(lowerContent, indicator) {
+			return AutoReviewResult{Safe: false, Reason: "Potential secret/credential in content"}
+		}
+	}
+
+	// Safe: writing to typical project files
+	safeExtensions := []string{
+		".go", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".rb",
+		".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+		".css", ".html", ".sql", ".sh", ".mod", ".sum",
+		".proto", ".graphql", ".vue", ".svelte",
+	}
+	for _, ext := range safeExtensions {
+		if strings.HasSuffix(base, ext) {
+			return AutoReviewResult{
+				Safe:   true,
+				Reason: fmt.Sprintf("Writing to project file with safe extension (%s)", ext),
+			}
+		}
+	}
+
+	// Unknown extension — needs semantic review
+	return AutoReviewResult{
+		Safe:   false,
+		Reason: "Unknown file extension, needs semantic review",
+	}
+}
+
+func callLLMForFileReview(ctx context.Context, cfg *autoReviewConfig, toolName, filePath, content string) (AutoReviewResult, error) {
+	prompt := fmt.Sprintf(`Review this file operation for safety:
+Tool: %s
+File: %s
+Content preview (first 500 chars): %s
+
+Is this file write operation safe? Consider:
+- Is the target path a reasonable project file?
+- Does the content look like normal code/config?
+- Any signs of credential leaking or destructive patterns?`, toolName, filePath, truncateString(content, 500))
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: prompt},
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Role: "system",
+				Parts: []*genai.Part{
+					{Text: `You are a security reviewer for file write operations. Respond with JSON only: {"safe": true/false, "reason": "explanation"}`},
+				},
+			},
+		},
+	}
+
+	content, err := llm.CollectNonStreaming(ctx, cfg.Model, req)
+	if err != nil {
+		return AutoReviewResult{}, err
+	}
+
+	content = strings.TrimSpace(content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	var result struct {
+		Safe   bool   `json:"safe"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return AutoReviewResult{Safe: false, Reason: "AI file review response format error"}, nil
 	}
 
 	return AutoReviewResult{Safe: result.Safe, Reason: result.Reason}, nil
@@ -230,7 +374,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 	if strings.Contains(cmd, "\n") || strings.Contains(cmd, "\r") {
 		return AutoReviewResult{
 			Safe:   false,
-			Reason: "规则审查：检测到换行符或多行指令，存在级联执行风险，禁止自动运行",
+			Reason: "Rule review: Detected newline or multiline instruction, cascade execution risk, auto-run blocked",
 		}
 	}
 
@@ -242,20 +386,20 @@ func heuristicReview(cmd string) AutoReviewResult {
 		if strings.Contains(subNorm, "$(") || strings.Contains(subNorm, "`") {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "规则审查：检测到命令替换或子 Shell 嵌套，存在越权风险",
+				Reason: "Rule review: Detected command substitution or subshell nesting, privilege escalation risk",
 			}
 		}
 		if strings.Contains(subNorm, "eval ") || strings.Contains(subNorm, "exec ") {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "规则审查：检测到动态执行（eval/exec），禁止自动运行",
+				Reason: "Rule review: Detected dynamic execution (eval/exec), auto-run blocked",
 			}
 		}
 
 		if isPathDangerous(sub) {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "安全沙箱阻断：检测到命令行参数中含有目录逃逸或越界访问系统敏感路径的操作",
+				Reason: "Security sandbox blocked: Detected directory traversal or out-of-bounds access to sensitive system paths",
 			}
 		}
 
@@ -271,7 +415,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 			if dangerousNames[cmdName] {
 				return AutoReviewResult{
 					Safe:   false,
-					Reason: fmt.Sprintf("规则审查：检测到危险系统命令 `%s`，禁止自动放行", cmdName),
+					Reason: fmt.Sprintf("Rule review: Detected dangerous system command `%s`, auto-approve blocked", cmdName),
 				}
 			}
 		}
@@ -283,7 +427,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 	if strings.ContainsAny(normalized, ";|&$<>`") {
 		return AutoReviewResult{
 			Safe:   false,
-			Reason: "规则审查：检测到 Shell 元字符或重定向操作（;|&$<>`），禁止自动运行",
+			Reason: "Rule review: Detected Shell metacharacters or redirection (;|&$<>`), auto-run blocked",
 		}
 	}
 
@@ -300,7 +444,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 		if strings.Contains(normalized, pattern) {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: fmt.Sprintf("规则审查：命令含有危险模式 `%s`，需要人工确认", strings.TrimSpace(pattern)),
+				Reason: fmt.Sprintf("Rule review: Command contains dangerous pattern `%s`, requires human confirmation", strings.TrimSpace(pattern)),
 			}
 		}
 	}
@@ -310,7 +454,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 		if strings.Contains(normalized, "-exec") || strings.Contains(normalized, "-ok") || strings.Contains(normalized, "-delete") {
 			return AutoReviewResult{
 				Safe:   false,
-				Reason: "规则审查：检测到 `find` 命令含有危险执行或删除参数（-exec/-ok/-delete），禁止自动运行",
+				Reason: "Rule review: Detected `find` command with dangerous execution or deletion flags (-exec/-ok/-delete), auto-run blocked",
 			}
 		}
 	}
@@ -332,7 +476,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 		if normalized == safe {
 			return AutoReviewResult{
 				Safe:   true,
-				Reason: fmt.Sprintf("规则审查：`%s` 是安全的只读命令", strings.Fields(normalized)[0]),
+				Reason: fmt.Sprintf("Rule review: `%s` is a safe read-only command", strings.Fields(normalized)[0]),
 			}
 		}
 		if strings.HasPrefix(normalized, safe+" ") {
@@ -349,7 +493,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 
 			return AutoReviewResult{
 				Safe:   true,
-				Reason: fmt.Sprintf("规则审查：`%s` 是安全的只读命令", strings.Fields(normalized)[0]),
+				Reason: fmt.Sprintf("Rule review: `%s` is a safe read-only command", strings.Fields(normalized)[0]),
 			}
 		}
 	}
@@ -357,7 +501,7 @@ func heuristicReview(cmd string) AutoReviewResult {
 	// Unknown — ask human
 	return AutoReviewResult{
 		Safe:   false,
-		Reason: "规则审查：未知或自定义命令，交由人工确认",
+		Reason: "Rule review: unknown or custom command, deferring to human confirmation",
 	}
 }
 

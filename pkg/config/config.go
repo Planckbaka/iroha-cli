@@ -36,13 +36,22 @@ func DefaultProviderConfig(provider string) ProviderDefaultConfig {
 	return ProviderDefaults["glm"]
 }
 
+// LSPServerConfig defines a language server for a specific language.
+type LSPServerConfig struct {
+	Language     string   `json:"language"`
+	Command      string   `json:"command"`
+	Args         []string `json:"args,omitempty"`
+	FilePatterns []string `json:"file_patterns,omitempty"`
+}
+
 // Config holds LLM model and credentials configurations
 type Config struct {
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	APIKey    string `json:"api_key"`
-	BaseURL   string `json:"base_url,omitempty"`
-	APIFormat string `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
+	Provider   string           `json:"provider"`
+	Model      string           `json:"model"`
+	APIKey     string           `json:"api_key"`
+	BaseURL    string           `json:"base_url,omitempty"`
+	APIFormat  string           `json:"api_format,omitempty"` // "openai" (default) or "anthropic"
+	LSPServers []LSPServerConfig `json:"lsp_servers,omitempty"`
 }
 
 // GetConfigPath returns the absolute path to user configuration file (~/.iroha.json)
@@ -61,7 +70,7 @@ func LoadConfig() (*Config, error) {
 			home, _ := os.UserHomeDir()
 			oldPath := filepath.Join(home, ".go-claude.json")
 			if oldData, oldErr := os.ReadFile(oldPath); oldErr == nil {
-				fmt.Printf("  检测到旧版配置文件 %s，正在自动迁移至 %s...\n", oldPath, path)
+				fmt.Printf("  Detected legacy config file %s, auto-migrating to %s...\n", oldPath, path)
 				if writeErr := os.WriteFile(path, oldData, 0600); writeErr == nil {
 					data = oldData
 					err = nil
@@ -97,7 +106,7 @@ func LoadConfig() (*Config, error) {
 			cfg.Provider = "kimi"
 		}
 		if cfg.Provider != "" {
-			fmt.Printf("  从模型名称 '%s' 推断 provider='%s'。使用 --provider 标志覆盖。\n", cfg.Model, cfg.Provider)
+			fmt.Printf("  Inferred provider='%s' from model name '%s'. Use --provider flag to override.\n", cfg.Model, cfg.Provider)
 		}
 	}
 
@@ -128,21 +137,21 @@ func RunConfigWizard() (*Config, error) {
 		existing = &Config{Provider: "glm", Model: ProviderDefaults["glm"].Model}
 	}
 
-	fmt.Println("\n\x1b[1;32m  Iroha Code CLI 配置向导 (Setup Wizard)\x1b[0m")
+	fmt.Println("\n\x1b[1;32m  Iroha Code CLI Setup Wizard\x1b[0m")
 	fmt.Println("\x1b[90m  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m")
-	fmt.Println("  本向导将指引您配置首选模型、API Key 以及自定义 Base URL。")
-	fmt.Printf("  [直接按回车将保留默认值或当前配置]\n\n")
+	fmt.Println("  This wizard will guide you through configuring your preferred model, API Key, and custom Base URL.")
+	fmt.Printf("  [Press Enter to keep default or current value]\n\n")
 
 	// 1. Choose Provider
-	fmt.Println("  \x1b[36m1. 选择大模型提供商 (LLM Provider):\x1b[0m")
-	fmt.Println("     [g] glm         - 智谱 AI GLM-4 官方 API")
-	fmt.Println("     [o] openai      - OpenAI 官方或任何兼容第三方 API (Ollama/本地模型)")
-	fmt.Println("     [c] claude      - Anthropic Claude 官方 API")
-	fmt.Println("     [d] deepseek    - DeepSeek 官方 API")
-	fmt.Println("     [k] kimi        - Moonshot Kimi 官方 API")
-	fmt.Println("     [f] siliconflow - SiliconFlow (硅基流动) API (极速部署 DeepSeek V3/R1)")
-	fmt.Printf("     当前选择: \x1b[33m%s\x1b[0m\n", existing.Provider)
-	fmt.Print("     选择提供商 (g/o/c/d/k/f) [回车不修改]: ")
+	fmt.Println("  \x1b[36m1. Select LLM Provider:\x1b[0m")
+	fmt.Println("     [g] glm         - Zhipu AI GLM-4 Official API")
+	fmt.Println("     [o] openai      - OpenAI official or any compatible third-party API (Ollama/local models)")
+	fmt.Println("     [c] claude      - Anthropic Claude Official API")
+	fmt.Println("     [d] deepseek    - DeepSeek Official API")
+	fmt.Println("     [k] kimi        - Moonshot Kimi Official API")
+	fmt.Println("     [f] siliconflow - SiliconFlow API (fast deployment of DeepSeek V3/R1)")
+	fmt.Printf("     Current selection: \x1b[33m%s\x1b[0m\n", existing.Provider)
+	fmt.Print("     Select provider (g/o/c/d/k/f) [Enter to skip]: ")
 	providerInput, _ := reader.ReadString('\n')
 	providerInput = strings.TrimSpace(strings.ToLower(providerInput))
 
@@ -172,10 +181,10 @@ func RunConfigWizard() (*Config, error) {
 	}
 
 	// 3. Choose Model Name
-	fmt.Println("\n  \x1b[36m2. 输入模型名称 (Model Name):\x1b[0m")
-	fmt.Printf("     推荐默认值: \x1b[90m%s\x1b[0m\n", defaultModel)
-	fmt.Printf("     当前配置: \x1b[33m%s\x1b[0m\n", existing.Model)
-	fmt.Printf("     请输入模型名称 [回车保留 %s]: ", existing.Model)
+	fmt.Println("\n  \x1b[36m2. Enter Model Name:\x1b[0m")
+	fmt.Printf("     Recommended default: \x1b[90m%s\x1b[0m\n", defaultModel)
+	fmt.Printf("     Current config: \x1b[33m%s\x1b[0m\n", existing.Model)
+	fmt.Printf("     Enter model name [Enter to keep %s]: ", existing.Model)
 	modelInput, _ := reader.ReadString('\n')
 	modelInput = strings.TrimSpace(modelInput)
 
@@ -187,17 +196,17 @@ func RunConfigWizard() (*Config, error) {
 	}
 
 	// 4. Input API Key
-	fmt.Println("\n  \x1b[36m3. 输入 API Key (Credentials):\x1b[0m")
+	fmt.Println("\n  \x1b[36m3. Enter API Key (Credentials):\x1b[0m")
 	if existing.APIKey != "" {
 		masked := existing.APIKey
 		if len(masked) > 8 {
 			masked = masked[:4] + "...." + masked[len(masked)-4:]
 		}
-		fmt.Printf("     当前配置: \x1b[33m%s\x1b[0m\n", masked)
+		fmt.Printf("     Current config: \x1b[33m%s\x1b[0m\n", masked)
 	} else {
-		fmt.Println("     当前未配置 API Key")
+		fmt.Println("     No API Key configured")
 	}
-	fmt.Print("     请输入 API Key [直接回车保留原配置]: ")
+	fmt.Print("     Enter API Key [Enter to keep current]: ")
 	apiKeyInput, _ := reader.ReadString('\n')
 	apiKeyInput = strings.TrimSpace(apiKeyInput)
 
@@ -208,22 +217,22 @@ func RunConfigWizard() (*Config, error) {
 
 	// 5. Input Base URL
 	defCfgForURL := DefaultProviderConfig(provider)
-	fmt.Println("\n  \x1b[36m4. 输入 API Base URL (自定义端点，留空代表官方端点):\x1b[0m")
-	fmt.Printf("     OpenAI 规范端点:    \x1b[90m%s\x1b[0m\n", defCfgForURL.BaseURL)
+	fmt.Println("\n  \x1b[36m4. Enter API Base URL (custom endpoint, leave empty for official):\x1b[0m")
+	fmt.Printf("     OpenAI endpoint:      \x1b[90m%s\x1b[0m\n", defCfgForURL.BaseURL)
 	if defCfgForURL.AnthropicBaseURL != "" {
-		fmt.Printf("     Anthropic 规范端点: \x1b[90m%s\x1b[0m\n", defCfgForURL.AnthropicBaseURL)
+		fmt.Printf("     Anthropic endpoint:   \x1b[90m%s\x1b[0m\n", defCfgForURL.AnthropicBaseURL)
 	}
 	if existing.BaseURL != "" {
 		formatHint := "OpenAI"
 		if existing.APIFormat == "anthropic" {
 			formatHint = "Anthropic"
 		}
-		fmt.Printf("     当前配置: \x1b[33m%s\x1b[0m (\x1b[90m%s 规范\x1b[0m)\n", existing.BaseURL, formatHint)
+		fmt.Printf("     Current config: \x1b[33m%s\x1b[0m (\x1b[90m%s format\x1b[0m)\n", existing.BaseURL, formatHint)
 	} else {
-		fmt.Println("     当前配置: 官方默认端点")
+		fmt.Println("     Current config: Official default endpoint")
 	}
-	fmt.Println("     提示: URL 需与所选 API 协议格式匹配 (步骤 5 可切换协议)")
-	fmt.Print("     请输入 Base URL (或 'default' 重置为官方默认) [回车不修改]: ")
+	fmt.Println("     Note: URL must match the selected API protocol format (step 5 to switch)")
+	fmt.Print("     Enter Base URL (or 'default' to reset) [Enter to skip]: ")
 	baseURLInput, _ := reader.ReadString('\n')
 	baseURLInput = strings.TrimSpace(baseURLInput)
 
@@ -240,23 +249,23 @@ func RunConfigWizard() (*Config, error) {
 	apiFormat := existing.APIFormat
 	supportsAnthropic := defCfgForURL.AnthropicBaseURL != ""
 	if supportsAnthropic {
-		fmt.Println("\n  \x1b[36m5. 选择 API 协议格式 (API Format):\x1b[0m")
-		fmt.Printf("     [o] openai     - OpenAI Chat Completions 规范 (端点: %s)\n", defCfgForURL.BaseURL)
-		fmt.Printf("     [a] anthropic  - Anthropic Messages 规范 (端点: %s)\n", defCfgForURL.AnthropicBaseURL)
+		fmt.Println("\n  \x1b[36m5. Select API Format:\x1b[0m")
+		fmt.Printf("     [o] openai     - OpenAI Chat Completions format (endpoint: %s)\n", defCfgForURL.BaseURL)
+		fmt.Printf("     [a] anthropic  - Anthropic Messages format (endpoint: %s)\n", defCfgForURL.AnthropicBaseURL)
 		if apiFormat == "anthropic" {
-			fmt.Printf("     当前配置: \x1b[33manthropic\x1b[0m\n")
+			fmt.Printf("     Current config: \x1b[33manthropic\x1b[0m\n")
 		} else {
-			fmt.Printf("     当前配置: \x1b[33mopenai (默认)\x1b[0m\n")
+			fmt.Printf("     Current config: \x1b[33mopenai (default)\x1b[0m\n")
 		}
-		fmt.Print("     选择协议 (o/a) [回车不修改]: ")
+		fmt.Print("     Select format (o/a) [Enter to skip]: ")
 		formatInput, _ := reader.ReadString('\n')
 		formatInput = strings.TrimSpace(strings.ToLower(formatInput))
 		if formatInput == "a" || formatInput == "anthropic" {
 			apiFormat = "anthropic"
 			// Auto-suggest Anthropic-compatible base URL
 			if baseURL != defCfgForURL.AnthropicBaseURL {
-				fmt.Printf("     \x1b[33m提示: Anthropic 规范推荐端点为 %s，当前为 %s\x1b[0m\n", defCfgForURL.AnthropicBaseURL, baseURL)
-				fmt.Print("     是否自动切换到推荐端点? (y/n) [y]: ")
+				fmt.Printf("     \x1b[33mNote: Recommended Anthropic endpoint is %s, current is %s\x1b[0m\n", defCfgForURL.AnthropicBaseURL, baseURL)
+				fmt.Print("     Auto-switch to recommended endpoint? (y/n) [y]: ")
 				switchInput, _ := reader.ReadString('\n')
 				switchInput = strings.TrimSpace(strings.ToLower(switchInput))
 				if switchInput == "" || switchInput == "y" || switchInput == "yes" {
@@ -280,10 +289,10 @@ func RunConfigWizard() (*Config, error) {
 	}
 
 	if err := SaveConfig(cfg); err != nil {
-		return nil, fmt.Errorf("保存配置文件失败: %w", err)
+		return nil, fmt.Errorf("failed to save config file: %w", err)
 	}
 
-	fmt.Println("\n\x1b[1;32m  🎉 配置已成功持久化至 ~/.iroha.json ！\x1b[0m")
+	fmt.Println("\n\x1b[1;32m  Configuration saved successfully to ~/.iroha.json!\x1b[0m")
 	fmt.Printf("\x1b[90m  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n\n")
 
 	return cfg, nil

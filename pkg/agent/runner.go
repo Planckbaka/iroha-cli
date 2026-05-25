@@ -29,7 +29,7 @@ type runnerHooks struct{}
 
 func (runnerHooks) NagReminder() string {
 	if GlobalTodoManager.RoundsSinceUpdate() >= 3 {
-		return "📌 [系统提示] 为了确保后续代码修改的连贯性，请在执行当前步骤前更新您的 todo 计划进度。"
+		return "📌 [System] To ensure continuity of subsequent code changes, please update your todo plan progress before executing the current step."
 	}
 	return ""
 }
@@ -97,7 +97,7 @@ type ToolStatus struct {
 	Success     bool
 	Error       error
 	Duration    time.Duration
-	StreamLines []string // 增量输出行（仅 shell_run 逐行流式使用）
+	StreamLines []string // incremental output lines (only for shell_run line-by-line streaming)
 }
 
 // ToolStatusBridge pipes tool status changes from the background runner to the foreground TUI
@@ -149,6 +149,7 @@ type CustomRunner struct {
 	BaseURL         string
 	APIFormat       llm.APIFormat
 	GenkitRegistry  *genkit.Genkit
+
 }
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
@@ -173,13 +174,13 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	systemPrompt := buildSystemPrompt()
 	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
 	if err != nil {
-		return nil, fmt.Errorf("创建模型适配器失败: %w", err)
+		return nil, fmt.Errorf("failed to create model adapter: %w", err)
 	}
 
 	// 2. Load classic SWE tools
 	tools, err := GetSWETools()
 	if err != nil {
-		return nil, fmt.Errorf("加载工具集失败: %w", err)
+		return nil, fmt.Errorf("failed to load tool set: %w", err)
 	}
 
 	// 3. Setup tool with custom confirmation provider that blocks on the Bridge
@@ -209,7 +210,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("创建 Agent 失败: %w", err)
+		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
 
 	// 5. Create persistent session service
@@ -218,7 +219,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	// Pre-load all sessions from disk
 	if err := GlobalSessionService.LoadSessions(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "警告: 恢复历史会话失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to restore historical sessions: %v\n", err)
 	}
 
 	// 6. Create ADK Runner
@@ -229,7 +230,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		AutoCreateSession: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("创建 Runner 失败: %w", err)
+		return nil, fmt.Errorf("failed to create runner: %w", err)
 	}
 
 	// 7. Fire SessionStart hooks — runs external scripts once at startup
@@ -356,6 +357,25 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 			prompt = sb.String() + prompt
 		}
 
+		// Fire HookUserPrompt before sending to LLM
+		hookUserResult := GlobalHookManager.RunHooks(HookUserPrompt, HookContext{
+			Prompt:    prompt,
+			SessionID: sessionID,
+		})
+		if hookUserResult.Blocked {
+			LogAudit(CatUserInput, "user_prompt_blocked", "User prompt blocked by hook", map[string]any{
+				"session_id": sessionID,
+				"reason":     hookUserResult.BlockReason,
+			})
+			onError(fmt.Errorf("prompt blocked by hook: %s", hookUserResult.BlockReason))
+			onDone()
+			return
+		}
+		// If hooks injected messages, prepend them to the prompt
+		if len(hookUserResult.Messages) > 0 {
+			prompt = strings.Join(hookUserResult.Messages, "\n") + "\n\n" + prompt
+		}
+
 		userMsg := &genai.Content{
 			Role: "user",
 			Parts: []*genai.Part{
@@ -368,6 +388,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 			StreamingMode: agent.StreamingModeSSE,
 		}, runConfig)
 
+		var responseTextLen int
 		for ev, err := range events {
 			if ctx.Err() != nil {
 				return
@@ -380,9 +401,23 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 				return
 			}
 			if ev != nil {
+				// Track response length for HookAgentResponse
+				if ev.Content != nil {
+					for _, p := range ev.Content.Parts {
+						if p != nil && p.Text != "" {
+							responseTextLen += len(p.Text)
+						}
+					}
+				}
 				onEvent(ev)
 			}
 		}
+
+		// Fire HookAgentResponse after LLM response is fully received
+		GlobalHookManager.RunHooks(HookAgentResponse, HookContext{
+			ResponseLength: responseTextLen,
+			SessionID:      sessionID,
+		})
 
 		LogInfo(CatSystem, "runner_complete", "Agent execution completed successfully", map[string]any{
 			"session_id": sessionID,
@@ -395,15 +430,15 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 					diffStr = diffStr[:8000]
 				}
 
-				gitPrompt := fmt.Sprintf(`你是一个专业的 Git 提交助手。请根据以下代码变更差异 (Git Diff)，生成一行精炼、语义化的 Git Commit Message。
-  
-要求：
-1. 必须使用语义化提交规范 (例如 feat: ..., fix: ..., chore: ..., refactor: ..., test: ...)。
-2. 必须控制在 50 个字符以内。
-3. 必须直接返回提交消息本身，不要包含任何 markdown 标记、双引号、单引号、段落或解释性文字。
-  
-[代码变更差异 (Git Diff)]:
-%s`, diffStr)
+				gitPrompt := fmt.Sprintf(`You are a professional Git commit assistant. Generate a concise, semantic Git Commit Message based on the following code changes (Git Diff).
+	  
+	Requirements:
+	1. Must use semantic commit conventions (e.g. feat: ..., fix: ..., chore: ..., refactor: ..., test: ...).
+	2. Must be within 50 characters.
+	3. Must return only the commit message itself, without any markdown markers, quotes, paragraphs, or explanatory text.
+	  
+	[Code Changes (Git Diff)]:
+	%s`, diffStr)
 
 				req := &model.LLMRequest{
 					Contents: []*genai.Content{
@@ -443,6 +478,11 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 				}
 			}
 		}
+
+			// Fire HookSessionEnd before signaling completion
+			GlobalHookManager.RunHooks(HookSessionEnd, HookContext{
+				SessionID: sessionID,
+			})
 
 		onDone()
 	}()
@@ -505,7 +545,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	})
 
 	if decision == "deny" {
-		return nil, fmt.Errorf("操作被安全策略拒绝: %s", reason)
+		return nil, fmt.Errorf("operation denied by security policy: %s", reason)
 	}
 
 	runnable, ok := b.Tool.(adkRunnableTool)
@@ -535,7 +575,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		reviewResult := ReviewCommand(cmdStr)
 
 		// Send review result to TUI
-		reviewMsg := fmt.Sprintf("AI 审查: %s", reviewResult.Reason)
+		reviewMsg := fmt.Sprintf("AI review: %s", reviewResult.Reason)
 		if reviewResult.Safe {
 			reviewMsg = "✅ " + reviewMsg
 		} else {
@@ -555,7 +595,44 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		}
 		// If safe but not in Auto Mode, add an informative note but still prompt for approval
 		if reviewResult.Safe {
-			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s (将在当前默认模式下提示确认)", reviewMsg)
+			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s (will prompt for confirmation under current default mode)", reviewMsg)
+		} else {
+			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s", reviewMsg)
+		}
+	} else if b.Name() == "file_write" {
+		filePath, fileContent := "", ""
+		if m, ok := args.(map[string]any); ok {
+			filePath, _ = m["path"].(string)
+			fileContent, _ = m["content"].(string)
+		}
+
+		ToolBridge.Send(ToolStatus{
+			Name:    "ai-review",
+			Args:    map[string]any{"file": filePath},
+			Running: true,
+		})
+
+		reviewResult := ReviewFileOperation("file_write", filePath, fileContent)
+
+		reviewMsg := fmt.Sprintf("AI file review: %s", reviewResult.Reason)
+		if reviewResult.Safe {
+			reviewMsg = "safe: " + reviewMsg
+		} else {
+			reviewMsg = "caution: " + reviewMsg
+		}
+		ToolBridge.Send(ToolStatus{
+			Name:    "ai-review",
+			Args:    map[string]any{"file": filePath},
+			Running: false,
+			Success: true,
+		})
+
+		if reviewResult.Safe && GlobalPermissionManager.GetMode() == ModeAuto {
+			GlobalPermissionManager.NoteApproval()
+			return b.runWithHooks(ctx, args, runnable)
+		}
+		if reviewResult.Safe {
+			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s (will prompt for confirmation under current default mode)", reviewMsg)
 		} else {
 			autoReviewNote = fmt.Sprintf("\n   [AI Review] %s", reviewMsg)
 		}
@@ -567,7 +644,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		if m, ok := args.(map[string]any); ok {
 			cmdStr = fmt.Sprintf("%v", m["command"])
 		}
-		promptMsg = fmt.Sprintf("%s\x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   原因: %s%s", prefix, cmdStr, reason, autoReviewNote)
+		promptMsg = fmt.Sprintf("%s\x1b[1;33m[shell_run]\x1b[0m attempting to run command: \x1b[32m$ %s\x1b[0m\n   Reason: %s%s", prefix, cmdStr, reason, autoReviewNote)
 	} else if b.Name() == "file_write" {
 		pathStr := ""
 		contentStr := ""
@@ -585,26 +662,26 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		}
 
 		if diffStr != "" {
-			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n%s", prefix, pathStr, reason, diffStr)
+			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m attempting to write file: \x1b[32m%s\x1b[0m\n   Reason: %s\n\n\x1b[1;34m[File Changes (Diff)]:\x1b[0m\n%s", prefix, pathStr, reason, diffStr)
 		} else {
-			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", prefix, pathStr, reason)
+			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m attempting to write file: \x1b[32m%s\x1b[0m\n   Reason: %s", prefix, pathStr, reason)
 		}
 	} else if b.Name() == "file_read" {
 		pathStr := ""
 		if m, ok := args.(map[string]any); ok {
 			pathStr = fmt.Sprintf("%v", m["path"])
 		}
-		promptMsg = fmt.Sprintf("%s\x1b[1;34m[file_read]\x1b[0m 正在尝试读取文件: \x1b[32m%s\x1b[0m\n   原因: %s", prefix, pathStr, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;34m[file_read]\x1b[0m attempting to read file: \x1b[32m%s\x1b[0m\n   Reason: %s", prefix, pathStr, reason)
 	} else if b.Name() == "search_grep" {
 		patternStr := ""
 		if m, ok := args.(map[string]any); ok {
 			patternStr = fmt.Sprintf("%v", m["pattern"])
 		}
-		promptMsg = fmt.Sprintf("%s\x1b[1;35m[search_grep]\x1b[0m 正在尝试全局搜索模式: \x1b[32m\"%s\"\x1b[0m\n   原因: %s", prefix, patternStr, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;35m[search_grep]\x1b[0m attempting to search pattern: \x1b[32m\"%s\"\x1b[0m\n   Reason: %s", prefix, patternStr, reason)
 	} else if b.Name() == "todo" {
-		promptMsg = fmt.Sprintf("%s\x1b[1;32m[todo]\x1b[0m 正在尝试更新任务规划进度表\n   原因: %s", prefix, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;32m[todo]\x1b[0m attempting to update task plan\n   Reason: %s", prefix, reason)
 	} else {
-		promptMsg = fmt.Sprintf("%s\x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   原因: %s", prefix, b.Name(), args, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;35m[%s]\x1b[0m attempting to execute: %v\n   Reason: %s", prefix, b.Name(), args, reason)
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())
@@ -616,7 +693,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	select {
 	case Bridge.PromptChan <- promptMsg:
 	case <-Bridge.CancelChanRead():
-		return nil, fmt.Errorf("操作已被取消")
+		return nil, fmt.Errorf("operation cancelled")
 	}
 
 	// Block on response with cancellation support
@@ -624,7 +701,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	select {
 	case approved = <-Bridge.ResponseChan:
 	case <-Bridge.CancelChanRead():
-		return nil, fmt.Errorf("操作已被取消")
+		return nil, fmt.Errorf("operation cancelled")
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Executing tool after approval: tool=%s approved=%s", b.Name(), approved)
@@ -650,9 +727,9 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 	denials := GlobalPermissionManager.NoteDenial()
 	warnMsg := ""
 	if denials >= 3 {
-		warnMsg = fmt.Sprintf("\n⚠️  \x1b[1;33m[安全熔断]\x1b[0m 连续拒绝 %d 次操作。建议您通过输入 `/mode plan` 切换到只读“规划模式”。", denials)
+		warnMsg = fmt.Sprintf("\n⚠️  \x1b[1;33m[Safety Fuse]\x1b[0m %d consecutive denials. Consider switching to read-only Plan mode by typing `/mode plan`.", denials)
 	}
-	return nil, fmt.Errorf("操作已被拒绝%s: %w", warnMsg, tool.ErrConfirmationRejected)
+	return nil, fmt.Errorf("operation rejected%s: %w", warnMsg, tool.ErrConfirmationRejected)
 }
 
 func (b *blockingConfirmationTool) Declaration() *genai.FunctionDeclaration {
@@ -661,29 +738,29 @@ func (b *blockingConfirmationTool) Declaration() *genai.FunctionDeclaration {
 			Name: b.Name(),
 		}
 		if b.Name() == "shell_run" {
-			decl.Description = "执行一条 Shell 命令。只允许在当前工作区目录下执行。"
+			decl.Description = "Execute a Shell command. Only allowed within the current workspace directory."
 			decl.ParametersJsonSchema = &genai.Schema{
 				Type: genai.TypeObject,
 				Properties: map[string]*genai.Schema{
 					"command": {
 						Type:        genai.TypeString,
-						Description: "要执行的本地 Shell 命令",
+						Description: "The local Shell command to execute",
 					},
 				},
 				Required: []string{"command"},
 			}
 		} else if b.Name() == "file_write" {
-			decl.Description = "向文件写入指定内容。这会覆盖原文件（如果有的话）。"
+			decl.Description = "Write specified content to a file. Overwrites the file if it exists."
 			decl.ParametersJsonSchema = &genai.Schema{
 				Type: genai.TypeObject,
 				Properties: map[string]*genai.Schema{
 					"path": {
 						Type:        genai.TypeString,
-						Description: "要写入的文件路径",
+						Description: "The file path to write to",
 					},
 					"content": {
 						Type:        genai.TypeString,
-						Description: "要写入的文本内容",
+						Description: "The text content to write",
 					},
 				},
 				Required: []string{"path", "content"},
@@ -730,7 +807,7 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	preResult := GlobalHookManager.RunHooks(HookPreToolUse, hookCtx)
 
 	if preResult.Blocked {
-		err := fmt.Errorf("🪝 [Hook 拦截] 工具 %s 被 PreToolUse Hook 阻断: %s", b.Name(), preResult.BlockReason)
+		err := fmt.Errorf("🪝 [Hook Block] Tool %s blocked by PreToolUse hook: %s", b.Name(), preResult.BlockReason)
 		durationMS := time.Since(startTime).Milliseconds()
 		LogAudit(CatToolCall, "tool_hook_blocked", fmt.Sprintf("Tool %s blocked by PreToolUse hook", b.Name()), map[string]any{
 			"tool":        b.Name(),
@@ -766,7 +843,7 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 
 	count := GlobalToolCircuitBreaker.Track(b.Name(), args, isFailure)
 	if isFailure && count >= 3 {
-		err = fmt.Errorf("【熔断保护】工具 %s 连续 %d 次执行失败且参数相同。为了防止无限循环和消耗过多 Token，该工具已被熔断拦截。请停止重复调用此工具，向用户反馈此问题并寻求人类指导。", b.Name(), count)
+		err = fmt.Errorf("[Circuit Breaker] Tool %s has failed %d consecutive times with identical arguments. To prevent infinite loops and excessive token usage, this tool has been circuit-broken. Stop retrying this tool, report the issue to the user and seek human guidance.", b.Name(), count)
 		LogAudit(CatToolCall, "tool_circuit_breaker_blocked", fmt.Sprintf("Tool %s blocked by circuit breaker", b.Name()), map[string]any{
 			"tool":        b.Name(),
 			"args":        args,
@@ -790,6 +867,12 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 			"args":        args,
 			"duration_ms": durationMS,
 		})
+			// Fire HookToolError when a tool execution fails
+			GlobalHookManager.RunHooks(HookToolError, HookContext{
+				ToolName:  b.Name(),
+				ToolInput: args,
+				ToolError: err.Error(),
+			})
 		ToolBridge.Send(ToolStatus{
 			Name:     b.Name(),
 			Args:     args,

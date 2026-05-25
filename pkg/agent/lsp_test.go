@@ -176,14 +176,19 @@ func (s *mockLSPServer) run() {
 }
 
 func setupMockLSPClient(t *testing.T, workdir string) (*LSPClient, *mockLSPServer) {
+	return setupMockLSPClientForLang(t, workdir, "go")
+}
+
+func setupMockLSPClientForLang(t *testing.T, workdir, language string) (*LSPClient, *mockLSPServer) {
 	inReader, inWriter := io.Pipe()
 	outReader, outWriter := io.Pipe()
 
 	client := &LSPClient{
-		stdin:   inWriter,
-		stdout:  outReader,
-		workdir: workdir,
-		pending: make(map[int64]chan *jsonrpcResponse),
+		stdin:    inWriter,
+		stdout:   outReader,
+		workdir:  workdir,
+		language: language,
+		pending:  make(map[int64]chan *jsonrpcResponse),
 	}
 
 	server := &mockLSPServer{
@@ -195,8 +200,9 @@ func setupMockLSPClient(t *testing.T, workdir string) (*LSPClient, *mockLSPServe
 	go client.readLoop()
 	go server.run()
 
+	key := lspClientKey(workdir, language)
 	lspClientsMu.Lock()
-	lspClients[workdir] = client
+	lspClients[key] = client
 	lspClientsMu.Unlock()
 
 	return client, server
@@ -482,7 +488,7 @@ func TestLSP_SandboxViolation(t *testing.T) {
 		t.Fatal("expected sandbox violation error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "安全沙箱阻断") {
+	if !strings.Contains(err.Error(), "security sandbox blocked") {
 		t.Errorf("expected sandbox error, got: %v", err)
 	}
 }

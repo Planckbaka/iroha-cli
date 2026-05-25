@@ -59,7 +59,7 @@ func (b *SystemPromptBuilder) Build() string {
 	// ─── 1. STABLE PREFIX SECTION ──────────────────────────────────────────
 
 	// Core Persona & Instructions
-	sb.WriteString("# Role & Core Persona\n")
+	sb.WriteString("[STICKY] # Role & Core Persona\n")
 	sb.WriteString("You are Iroha, a professional software engineering assistant running as an interactive CLI agent. You can read and write files, run shell commands, search code, and execute tests within the current workspace. For sensitive operations (writing files, running shell commands), you must invoke the corresponding tool — the framework will request user confirmation before execution. Respond in well-formatted Markdown.\n\n")
 	sb.WriteString("## Code Completeness (Critical)\n")
 	sb.WriteString("- When providing code changes, writing new files, or generating fixes, you must output complete, immediately runnable, and fully functional code blocks.\n")
@@ -277,7 +277,7 @@ func (b *SystemPromptBuilder) readCLAUDEFiles() string {
 		return ""
 	}
 
-	return "### CLAUDE.md Guidelines\n\n" + sb.String()
+	return "[STICKY] ### CLAUDE.md Guidelines\n\n" + sb.String()
 }
 
 func (b *SystemPromptBuilder) readAGENTSFiles() string {

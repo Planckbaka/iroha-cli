@@ -101,23 +101,23 @@ type SlashMenuItem struct {
 
 // AllSlashCommands is the master list of all supported slash commands
 var AllSlashCommands = []SlashMenuItem{
-	{"/permission", "选择或切换权限等级 (plan | auto | default)"},
-	{"/rules", "查看当前权限规则列表"},
-	{"/hooks", "查看或热重载 Hook 配置 (reload)"},
-	{"/memory", "查看跨会话记忆内容"},
-	{"/prompt", "查看完整 System Prompt"},
-	{"/sections", "查看 System Prompt 结构大纲"},
-	{"/task", "查看任务规划看板"},
-	{"/team", "查看多 Agent 团队状态"},
-	{"/worktree", "查看 Git Worktree 隔离状态"},
-	{"/mcp", "查看 MCP 插件状态"},
-	{"/bg", "查看后台任务状态"},
-	{"/sessions", "查看和切换会话历史"},
-		{"/resume", "恢复最近一次会话，继续对话"},
-	{"/help", "查看系统使用帮助、键盘快捷键与指令面板"},
-	{"/commands", "查看所有支持的斜杠快捷指令列表"},
-	{"/doctor", "运行系统开发环境诊断，检测 API、网络、Git 与工具链状态"},
-	{"/exit", "退出程序"},
+	{"/permission", "Select or switch permission level (plan | auto | default)"},
+	{"/rules", "View current permission rules list"},
+	{"/hooks", "View or hot-reload Hook configuration (reload)"},
+	{"/memory", "View cross-session memory content"},
+	{"/prompt", "View full System Prompt"},
+	{"/sections", "View System Prompt structure outline"},
+	{"/task", "View task planning board"},
+	{"/team", "View multi-agent team status"},
+	{"/worktree", "View Git Worktree isolation status"},
+	{"/mcp", "View MCP plugin status"},
+	{"/bg", "View background task status"},
+	{"/sessions", "View and switch session history"},
+		{"/resume", "Resume the most recent session and continue the conversation"},
+	{"/help", "View system help, keyboard shortcuts, and command palette"},
+	{"/commands", "View all supported slash commands"},
+	{"/doctor", "Run system diagnostics to check API, network, Git, and toolchain status"},
+	{"/exit", "Exit the program"},
 }
 
 // Model is the main TUI model
@@ -158,6 +158,11 @@ type Model struct {
 	// Token usage tracking
 	TotalTokens      int
 	TotalSessionCost float64
+
+	// Incremental streaming render cache
+	RenderedText    string
+	LastRenderedLen int
+	PendingText     string
 
 	// Status tag parsing
 	CurrentStatusText string
@@ -410,14 +415,17 @@ func (m *Model) finalizeTurn() tea.Cmd {
 	}
 	m.ActiveTool = agent.ToolStatus{}
 	m.CurrentStatusText = ""
+	m.RenderedText = ""
+	m.PendingText = ""
+	m.LastRenderedLen = 0
 
-	// 更新 token 计数与资费估算
+	// Update token count and cost estimation
 	if m.Runner != nil {
 		usage := m.Runner.GetTokenUsage()
 		if usage > 0 {
 			m.TotalTokens = usage
 		} else if m.TotalTokens == 0 {
-			// Fallback: 本地估算（字符数 / 4）
+			// Fallback: local estimation (character count / 4)
 			m.TotalTokens = len(m.StreamedText) / 4
 		}
 		m.TotalSessionCost = config.EstimateCost(m.Runner.ModelName(), m.TotalTokens)
@@ -456,6 +464,17 @@ func extractCommand(args any) string {
 	return ""
 }
 
+// renderIncremental renders only the pending text through Glamour and appends it
+// to the cached RenderedText, avoiding a full re-render of the entire stream.
+func (m *Model) renderIncremental() {
+	rendered := RenderMarkdown(m.PendingText)
+	m.RenderedText += rendered
+	m.LastRenderedLen = len(m.StreamedText)
+	m.PendingText = ""
+	m.Viewport.SetContent(m.renderViewportContent())
+	m.Viewport.GotoBottom()
+}
+
 func (m *Model) renderViewportContent() string {
 	// If interactive Diff is active during confirmation, only render the Diff view in the Viewport
 	if m.State == stateConfirming && m.ConfirmDiffActive && m.ConfirmDiffText != "" {
@@ -487,9 +506,9 @@ func (m *Model) renderViewportContent() string {
 	switch m.State {
 	case stateThinking:
 		if m.ShellStreamActive && len(m.ShellOutputStreamLines) > 0 {
-			// Shell 流式输出：spinner + 流式区域
+			// Shell streaming output: spinner + streaming area
 			cmd := extractCommand(m.ActiveTool.Args)
-			sb.WriteString("\n" + StyleAgentMsg.Render(m.Spinner.View()+StyleThinking.Render(" 运行终端命令...")))
+			sb.WriteString("\n" + StyleAgentMsg.Render(m.Spinner.View()+StyleThinking.Render(" Running terminal command...")))
 			sb.WriteString(RenderShellStreamArea(m.ShellOutputStreamLines, cmd, m.Width))
 		} else if m.ActiveTool.Running {
 			activity := FormatToolActivity(m.ActiveTool.Name, m.ActiveTool.Args)
@@ -498,7 +517,13 @@ func (m *Model) renderViewportContent() string {
 			sb.WriteString("\n" + StyleAgentMsg.Render(m.Spinner.View()+StyleThinking.Render(" thinking...")))
 		}
 	case stateStreaming:
-		sb.WriteString("\n" + StyleAgentMsg.Render(RenderMarkdown(m.StreamedText)))
+		fullRendered := m.RenderedText
+		if m.PendingText != "" {
+			fullRendered += RenderMarkdown(m.PendingText)
+		}
+		if fullRendered != "" {
+			sb.WriteString("\n" + StyleAgentMsg.Render(fullRendered))
+		}
 		if m.ShellStreamActive && len(m.ShellOutputStreamLines) > 0 {
 			cmd := extractCommand(m.ActiveTool.Args)
 			sb.WriteString(RenderShellStreamArea(m.ShellOutputStreamLines, cmd, m.Width))

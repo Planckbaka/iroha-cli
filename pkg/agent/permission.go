@@ -76,8 +76,10 @@ func NewPermissionManager(mode PermissionMode) *PermissionManager {
 			{Tool: "background_run", Content: "rm -rf /", Behavior: "deny"},
 			{Tool: "background_run", Content: "sudo *", Behavior: "deny"},
 			{Tool: "file_read", Path: "*", Behavior: "allow"},
+			{Tool: "file_edit", Path: "*", Behavior: "ask"},
 			{Tool: "list_directory", Behavior: "allow"},
 			{Tool: "search_grep", Behavior: "allow"},
+			{Tool: "find_files", Behavior: "allow"},
 			{Tool: "todo", Behavior: "allow"},
 			{Tool: "task_create", Behavior: "allow"},
 			{Tool: "task_update", Behavior: "allow"},
@@ -223,7 +225,7 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 	}
 
 	// Step 2: Mode-based decisions
-	isWrite := (toolName == "file_write" || toolName == "shell_run" || toolName == "background_run" || strings.HasPrefix(toolName, "mcp__"))
+	isWrite := (toolName == "file_write" || toolName == "file_edit" || toolName == "shell_run" || toolName == "background_run" || strings.HasPrefix(toolName, "mcp__"))
 
 	if pm.mode == ModePlan && isWrite {
 		pm.consecutiveDenials++
@@ -317,6 +319,8 @@ func (pm *PermissionManager) matches(rule PermissionRule, toolName string, args 
 		} else if m, ok := args.(FileReadArgs); ok {
 			pathVal = m.Path
 		} else if m, ok := args.(FileWriteArgs); ok {
+			pathVal = m.Path
+		} else if m, ok := args.(FileEditArgs); ok {
 			pathVal = m.Path
 		}
 		if !matchesPattern(rule.Path, pathVal) {

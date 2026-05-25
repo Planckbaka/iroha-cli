@@ -67,7 +67,7 @@ func (s *PersistentSessionService) Create(ctx context.Context, req *session.Crea
 	})
 	if err := s.SaveSession(ctx, resp.Session); err != nil {
 		// Log error but do not fail the execution
-		fmt.Fprintf(os.Stderr, "警告: 无法持久化新建会话: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to persist new session: %v\n", err)
 	}
 	return resp, nil
 }
@@ -111,7 +111,7 @@ func (s *PersistentSessionService) AppendEvent(ctx context.Context, sess session
 		return err
 	}
 	if err := s.SaveSession(ctx, sess); err != nil {
-		fmt.Fprintf(os.Stderr, "警告: 无法保存追加事件的会话: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to save session with appended event: %v\n", err)
 	}
 	return nil
 }
@@ -394,7 +394,7 @@ func getFirstPrompt(events []*session.Event) string {
 			}
 		}
 	}
-	return "新会话"
+	return "New Session"
 }
 
 // GetSessionsDir returns the default directory path for session JSON files.

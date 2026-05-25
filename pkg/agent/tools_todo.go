@@ -6,19 +6,19 @@ import (
 	"google.golang.org/adk/tool"
 )
 
-// 5. todo (会话进度规划工具)
+// 5. todo (session progress planning tool)
 type TodoArgs struct {
-	Items []TodoItem `json:"items" description:"要更新的整个规划列表项"`
+	Items []TodoItem `json:"items" description:"The full plan list to update"`
 }
 
 type TodoResult struct {
-	RenderedPlan string `json:"rendered_plan" description:"格式化渲染后的当前进度表"`
+	RenderedPlan string `json:"rendered_plan" description:"Formatted rendered current progress board"`
 }
 
 func TodoHandler(ctx tool.Context, args TodoArgs) (TodoResult, error) {
 	err := GlobalTodoManager.Update(args.Items)
 	if err != nil {
-		return TodoResult{}, fmt.Errorf("更新任务清单失败: %w", err)
+		return TodoResult{}, fmt.Errorf("failed to update task list: %w", err)
 	}
 	return TodoResult{RenderedPlan: GlobalTodoManager.Render()}, nil
 }

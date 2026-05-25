@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,20 @@ type HookEvent string
 const (
 	// HookSessionStart fires once when the runner is created.
 	HookSessionStart HookEvent = "SessionStart"
+	// HookSessionEnd fires once when the runner shuts down.
+	HookSessionEnd HookEvent = "SessionEnd"
+	// HookUserPrompt fires before a user prompt is sent to the LLM.
+	HookUserPrompt HookEvent = "UserPrompt"
+	// HookAgentResponse fires after an LLM response is received.
+	HookAgentResponse HookEvent = "AgentResponse"
 	// HookPreToolUse fires before every tool call. Can block execution (exit 1).
 	HookPreToolUse HookEvent = "PreToolUse"
 	// HookPostToolUse fires after every tool call. Can annotate the result (exit 2).
 	HookPostToolUse HookEvent = "PostToolUse"
+	// HookToolError fires when a tool call returns an error.
+	HookToolError HookEvent = "ToolError"
+	// HookCompaction fires when context compaction occurs.
+	HookCompaction HookEvent = "Compaction"
 )
 
 // HookDef is a single hook entry from the config file.
@@ -31,6 +42,13 @@ type HookDef struct {
 	Matcher string `json:"matcher,omitempty"`
 	// Command is the shell command to execute.
 	Command string `json:"command"`
+	// Timeout is an optional per-hook timeout in seconds. If > 0, overrides the
+	// event-category default timeout for this specific hook.
+	Timeout int `json:"timeout,omitempty"`
+	// OnTimeout controls behavior when the hook times out.
+	// "proceed" (default) means fail-open: log and continue.
+	// "block" means fail-closed: treat timeout as a block.
+	OnTimeout string `json:"on_timeout,omitempty"`
 }
 
 // HookConfig mirrors the structure of a hooks.json config file.
@@ -47,6 +65,16 @@ type HookContext struct {
 	ToolInput any
 	// ToolOutput is the string output of the tool (only set for PostToolUse).
 	ToolOutput string
+	// Prompt is the user's prompt text (for HookUserPrompt).
+	Prompt string
+	// ResponseLength is the length of the agent's response in bytes (for HookAgentResponse).
+	ResponseLength int
+	// ToolError is the error message from a failed tool call (for HookToolError).
+	ToolError string
+	// CompactionType describes the compaction phase (for HookCompaction).
+	CompactionType string
+	// SessionID is the session identifier (for HookSessionEnd).
+	SessionID string
 }
 
 // HookResult carries the aggregate outcome of running all hooks for an event.
@@ -219,21 +247,63 @@ func (hm *HookManager) RunHooks(event HookEvent, ctx HookContext) HookResult {
 	return result
 }
 
+// hookTimeoutForEvent returns the default timeout for a given event category.
+func hookTimeoutForEvent(event HookEvent) time.Duration {
+	switch event {
+	case HookPreToolUse, HookPostToolUse, HookToolError:
+		return 5 * time.Second
+	case HookSessionStart, HookSessionEnd:
+		return 10 * time.Second
+	case HookUserPrompt, HookAgentResponse:
+		return 15 * time.Second
+	case HookCompaction:
+		return 10 * time.Second
+	default:
+		return 5 * time.Second
+	}
+}
+
 // runOne executes a single hook command and interprets its exit code.
 func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) HookResult {
 	start := time.Now()
+
 	// Build environment: standard env + hook context vars
-	inputJSON, _ := json.Marshal(ctx.ToolInput)
 	extraEnv := []string{
 		"HOOK_EVENT=" + string(event),
-		"HOOK_TOOL_NAME=" + ctx.ToolName,
-		"HOOK_TOOL_INPUT=" + hookTruncate(string(inputJSON), 10000),
 	}
-	if event == HookPostToolUse && ctx.ToolOutput != "" {
+	if ctx.ToolName != "" {
+		extraEnv = append(extraEnv, "HOOK_TOOL_NAME="+ctx.ToolName)
+	}
+	if ctx.ToolInput != nil {
+		inputJSON, _ := json.Marshal(ctx.ToolInput)
+		extraEnv = append(extraEnv, "HOOK_TOOL_INPUT="+hookTruncate(string(inputJSON), 10000))
+	}
+	if ctx.ToolOutput != "" {
 		extraEnv = append(extraEnv, "HOOK_TOOL_OUTPUT="+hookTruncate(ctx.ToolOutput, 10000))
 	}
+	if ctx.ToolError != "" {
+		extraEnv = append(extraEnv, "HOOK_TOOL_ERROR="+ctx.ToolError)
+	}
+	if ctx.Prompt != "" {
+		extraEnv = append(extraEnv, "HOOK_PROMPT="+hookTruncate(ctx.Prompt, 10000))
+	}
+	if ctx.ResponseLength > 0 {
+		extraEnv = append(extraEnv, "HOOK_RESPONSE_LENGTH="+strconv.Itoa(ctx.ResponseLength))
+	}
+	if ctx.CompactionType != "" {
+		extraEnv = append(extraEnv, "HOOK_COMPACTION_TYPE="+ctx.CompactionType)
+	}
+	if ctx.SessionID != "" {
+		extraEnv = append(extraEnv, "HOOK_SESSION_ID="+ctx.SessionID)
+	}
 
-	execCtx, cancel := context.WithTimeout(context.Background(), hm.timeout)
+	// Determine timeout: per-hook override > event-category default
+	timeout := hookTimeoutForEvent(event)
+	if def.Timeout > 0 {
+		timeout = time.Duration(def.Timeout) * time.Second
+	}
+
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, "sh", "-c", def.Command)
@@ -250,20 +320,31 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 	exitCode := 0
 	if err != nil {
 		if execCtx.Err() != nil {
-			// Timeout — treat as continue (log only)
-			fmt.Fprintf(os.Stderr, "[hook:%s] timeout (%v)\n", event, hm.timeout)
-			LogError(CatSession, "hook_timeout", fmt.Sprintf("Hook command timed out after %v", hm.timeout), execCtx.Err(), map[string]any{
+			// Timeout behavior depends on def.OnTimeout
+			fmt.Fprintf(os.Stderr, "[hook:%s] timeout (%v)\n", event, timeout)
+			LogError(CatSession, "hook_timeout", fmt.Sprintf("Hook command timed out after %v", timeout), execCtx.Err(), map[string]any{
 				"event":       event,
 				"command":     def.Command,
 				"tool":        ctx.ToolName,
 				"duration_ms": durationMS,
 			})
+			if def.OnTimeout == "block" {
+				return HookResult{Blocked: true, BlockReason: fmt.Sprintf("hook timed out after %v", timeout)}
+			}
+			// Default: fail-open — log and continue
 			return HookResult{}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			exitCode = -1
+			// Unexpected crash (not an ExitError) — always fail-closed
+			LogError(CatSession, "hook_crash", "Hook command crashed unexpectedly", err, map[string]any{
+				"event":       event,
+				"command":     def.Command,
+				"tool":        ctx.ToolName,
+				"duration_ms": durationMS,
+			})
+			return HookResult{Blocked: true, BlockReason: fmt.Sprintf("hook crashed: %v", err)}
 		}
 	}
 
@@ -308,7 +389,7 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 		return HookResult{}
 
 	default:
-		// Unknown exit code — treat as continue (log warning)
+		// Unknown exit code — always fail-closed (unexpected crash)
 		LogWarn(CatSession, "hook_execute_unknown_code", fmt.Sprintf("Hook executed with unexpected exit code: %d", exitCode), map[string]any{
 			"event":       event,
 			"command":     def.Command,
@@ -318,7 +399,7 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 			"stderr":      stderr.String(),
 			"stdout":      stdout.String(),
 		})
-		return HookResult{}
+		return HookResult{Blocked: true, BlockReason: fmt.Sprintf("hook exited with unexpected code %d: %s", exitCode, strings.TrimSpace(stderr.String()))}
 	}
 }
 

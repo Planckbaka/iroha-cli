@@ -14,17 +14,17 @@ func TestRenderConfirmCard(t *testing.T) {
 	p := "Allow running command?"
 
 	s0 := RenderConfirmCard(p, 0)
-	if !strings.Contains(s0, "Y 同意") {
+	if !strings.Contains(s0, "Y Allow") {
 		t.Error("RenderConfirmCard should render option Y")
 	}
 
 	s1 := RenderConfirmCard(p, 1)
-	if !strings.Contains(s1, "N 拒绝") {
+	if !strings.Contains(s1, "N Deny") {
 		t.Error("RenderConfirmCard should render option N")
 	}
 
 	s2 := RenderConfirmCard(p, 2)
-	if !strings.Contains(s2, "A 始终允许") {
+	if !strings.Contains(s2, "A Always Allow") {
 		t.Error("RenderConfirmCard should render option A")
 	}
 }
@@ -137,13 +137,13 @@ func TestNewModelBypassPermission(t *testing.T) {
 func TestRenderHelpAndCancel(t *testing.T) {
 	// Test RenderHelpDashboard
 	h := RenderHelpDashboard()
-	if !strings.Contains(h, "Iroha Code") || !strings.Contains(h, "键盘快捷键") {
+	if !strings.Contains(h, "Iroha Code") || !strings.Contains(h, "Keyboard Shortcuts") {
 		t.Errorf("expected help dashboard to render help text, got:\n%s", h)
 	}
 
 	// Test RenderCancelCard
 	c := RenderCancelCard(1500 * time.Millisecond)
-	if !strings.Contains(c, "会话已被用户中止") || !strings.Contains(c, "1.5s") {
+	if !strings.Contains(c, "Session aborted by user") || !strings.Contains(c, "1.5s") {
 		t.Errorf("expected cancellation card to render elapsed duration, got:\n%s", c)
 	}
 }
@@ -277,7 +277,7 @@ func TestConfirmationPromptAndDiffSplitting(t *testing.T) {
 
 	// 2. Prompt with diff marker
 	diffContent := "+ added line\n- deleted line"
-	fullPromptWithDiff := "Allow writing file test.txt?\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n" + diffContent
+	fullPromptWithDiff := "Allow writing file test.txt?\n\n\x1b[1;34m[File Changes (Diff)]:\x1b[0m\n" + diffContent
 
 	res, _ = m.Update(ConfirmationRequiredMsg{Prompt: fullPromptWithDiff})
 	newM = res.(Model)

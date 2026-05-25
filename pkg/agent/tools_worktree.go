@@ -7,8 +7,8 @@ import (
 )
 
 type WorktreeCreateArgs struct {
-	Name   string `json:"name" description:"隔离工作区分支名称，如 wt-feat-auth"`
-	TaskID string `json:"task_id" description:"绑定的任务 ID"`
+	Name   string `json:"name" description:"Isolated workspace branch name, e.g. wt-feat-auth"`
+	TaskID string `json:"task_id" description:"Bound task ID"`
 }
 
 type WorktreeCreateResult struct {
@@ -40,7 +40,7 @@ func WorktreeListHandler(ctx tool.Context, args WorktreeListArgs) (WorktreeListR
 }
 
 type WorktreeStatusArgs struct {
-	Name string `json:"name" description:"待查询的隔离区名称"`
+	Name string `json:"name" description:"The isolated workspace name to query"`
 }
 
 type WorktreeStatusResult struct {
@@ -62,7 +62,7 @@ func WorktreeStatusHandler(ctx tool.Context, args WorktreeStatusArgs) (WorktreeS
 }
 
 type WorktreeEnterArgs struct {
-	Name string `json:"name" description:"要切换并进入的隔离区名称"`
+	Name string `json:"name" description:"The isolated workspace name to switch into"`
 }
 
 type WorktreeEnterResult struct {
@@ -78,9 +78,9 @@ func WorktreeEnterHandler(ctx tool.Context, args WorktreeEnterArgs) (WorktreeEnt
 }
 
 type WorktreeCloseoutArgs struct {
-	Name         string `json:"name" description:"隔离区名称"`
-	Action       string `json:"action" description:"收尾操作类型，可选：keep, remove"`
-	CompleteTask bool   `json:"complete_task" description:"是否同时联动将绑定的任务状态标记为已完成"`
+	Name         string `json:"name" description:"Isolated workspace name"`
+	Action       string `json:"action" description:"Close-out action type. Options: keep, remove"`
+	CompleteTask bool   `json:"complete_task" description:"Whether to also mark the bound task as completed"`
 }
 
 type WorktreeCloseoutResult struct {

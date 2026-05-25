@@ -13,7 +13,7 @@ import (
 	"google.golang.org/adk/tool"
 )
 
-// 4. shell_run (需要极其严格的人机确认)
+// 4. shell_run (requires strict human confirmation)
 type ShellRunArgs struct {
 	Command string `json:"command" description:"The local shell command to execute"`
 }
@@ -49,7 +49,7 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 	}
 	defer func() { _ = cmd.Process.Kill() }()
 
-	// stderr 合并 goroutine
+	// stderr merge goroutine
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -57,7 +57,7 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 		_, _ = io.Copy(multiWriter, stderr)
 	}()
 
-	// 逐行流式扫描
+	// Line-by-line streaming scan
 	scanner := bufio.NewScanner(pr)
 	lineCount := 0
 	for scanner.Scan() {
@@ -72,12 +72,12 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 		}
 	}
 
-	// 顺序保证：scanner EOF → join stderr goroutine → 关闭 pipe writer → cmd.Wait()
+	// Ordering guarantee: scanner EOF -> join stderr goroutine -> close pipe writer -> cmd.Wait()
 	wg.Wait()
 	_ = pw.Close()
 	_ = cmd.Wait()
 
-	// 构建最终结果
+	// Build final result
 	exitCode := 0
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()

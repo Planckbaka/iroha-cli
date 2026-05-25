@@ -76,12 +76,87 @@ type FlatSymbol struct {
 	EndLine   int    `json:"end_line"`   // 1-indexed
 }
 
+// LSPServerConfig defines a language server for a specific language.
+type LSPServerConfig struct {
+	Language     string   `json:"language"`
+	Command      string   `json:"command"`
+	Args         []string `json:"args,omitempty"`
+	FilePatterns []string `json:"file_patterns,omitempty"`
+}
+
+// DefaultLSPServers provides built-in defaults for common languages.
+var DefaultLSPServers = []LSPServerConfig{
+	{Language: "go", Command: "gopls", Args: []string{"-mode=stdio"}, FilePatterns: []string{"*.go"}},
+	{Language: "typescript", Command: "typescript-language-server", Args: []string{"--stdio"}, FilePatterns: []string{"*.ts", "*.tsx", "*.js", "*.jsx"}},
+	{Language: "python", Command: "pyright-langserver", Args: []string{"--stdio"}, FilePatterns: []string{"*.py"}},
+	{Language: "rust", Command: "rust-analyzer", Args: []string{}, FilePatterns: []string{"*.rs"}},
+}
+
+// lspServers holds the active server configurations, merged from defaults and user config.
+var lspServers []LSPServerConfig
+
+func init() {
+	lspServers = make([]LSPServerConfig, len(DefaultLSPServers))
+	copy(lspServers, DefaultLSPServers)
+}
+
+// SetLSPServers replaces the active LSP server list (called after loading user config).
+func SetLSPServers(servers []LSPServerConfig) {
+	// Build merged list: user servers first, then defaults not overridden.
+	seenLang := make(map[string]bool)
+	var merged []LSPServerConfig
+	for _, s := range servers {
+		merged = append(merged, s)
+		seenLang[s.Language] = true
+	}
+	for _, s := range DefaultLSPServers {
+		if !seenLang[s.Language] {
+			merged = append(merged, s)
+		}
+	}
+	lspServers = merged
+}
+
+// lspServerForLanguage returns the LSPServerConfig for a given language, or nil if not configured.
+func lspServerForLanguage(lang string) *LSPServerConfig {
+	for i := range lspServers {
+		if lspServers[i].Language == lang {
+			return &lspServers[i]
+		}
+	}
+	return nil
+}
+
+// languageFromPath detects the language from a file extension.
+func languageFromPath(filePath string) string {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".ts":
+		return "typescript"
+	case ".tsx":
+		return "typescript"
+	case ".js":
+		return "typescript"
+	case ".jsx":
+		return "typescript"
+	case ".py":
+		return "python"
+	case ".rs":
+		return "rust"
+	default:
+		return ""
+	}
+}
+
 type LSPClient struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
 	stdout   io.ReadCloser
 	workdir  string
+	language string
 	reqID    int64
 	pending  map[int64]chan *jsonrpcResponse
 	isClosed bool
@@ -89,34 +164,46 @@ type LSPClient struct {
 
 var (
 	lspClientsMu sync.Mutex
-	lspClients   = make(map[string]*LSPClient)
+	lspClients   = make(map[string]*LSPClient) // key: "workdir:language"
 )
 
-func getLSPClient(workdir string) (*LSPClient, error) {
+// lspClientKey returns the cache key for a (workdir, language) pair.
+func lspClientKey(workdir, language string) string {
+	return workdir + ":" + language
+}
+
+func getLSPClient(workdir, language string) (*LSPClient, error) {
+	key := lspClientKey(workdir, language)
 	lspClientsMu.Lock()
-	client, exists := lspClients[workdir]
+	client, exists := lspClients[key]
 	if exists && !client.isClosed {
 		lspClientsMu.Unlock()
 		return client, nil
 	}
 
-	c, err := startLSPClient(workdir)
+	cfg := lspServerForLanguage(language)
+	if cfg == nil {
+		lspClientsMu.Unlock()
+		return nil, fmt.Errorf("no LSP server configured for language '%s'", language)
+	}
+
+	c, err := startLSPClient(workdir, cfg)
 	if err != nil {
 		lspClientsMu.Unlock()
 		return nil, err
 	}
-	lspClients[workdir] = c
+	lspClients[key] = c
 	lspClientsMu.Unlock()
 	return c, nil
 }
 
-func startLSPClient(workdir string) (*LSPClient, error) {
-	goplsPath, err := exec.LookPath("gopls")
+func startLSPClient(workdir string, cfg *LSPServerConfig) (*LSPClient, error) {
+	serverPath, err := exec.LookPath(cfg.Command)
 	if err != nil {
-		return nil, fmt.Errorf("未在系统 PATH 中找到 'gopls' 二进制文件。\n【修复建议】请运行 'go install golang.org/x/tools/gopls@latest' 安装并重试。")
+		return nil, fmt.Errorf("'%s' binary not found in system PATH.\n[Fix suggestion] Install the %s language server ('%s') and retry.", cfg.Command, cfg.Language, cfg.Command)
 	}
 
-	cmd := exec.Command(goplsPath, "-mode=stdio")
+	cmd := exec.Command(serverPath, cfg.Args...)
 	cmd.Dir = workdir
 
 	stdin, err := cmd.StdinPipe()
@@ -135,11 +222,12 @@ func startLSPClient(workdir string) (*LSPClient, error) {
 	}
 
 	c := &LSPClient{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		workdir: workdir,
-		pending: make(map[int64]chan *jsonrpcResponse),
+		cmd:      cmd,
+		stdin:    stdin,
+		stdout:   stdout,
+		workdir:  workdir,
+		language: cfg.Language,
+		pending:  make(map[int64]chan *jsonrpcResponse),
 	}
 
 	go c.readLoop()
@@ -437,9 +525,9 @@ func symbolKindToString(kind int) string {
 // ─── SWE Tools Handlers ──────────────────────────────────────────────────
 
 type LSPGotoDefinitionArgs struct {
-	Path      string `json:"path" description:"当前文件相对或绝对路径"`
-	Line      int    `json:"line" description:"1-indexed 符号所在的行号"`
-	Character int    `json:"character" description:"1-indexed 符号所在的字符偏移/列号"`
+	Path      string `json:"path" description:"Current file relative or absolute path"`
+	Line      int    `json:"line" description:"1-indexed line number where the symbol is located"`
+	Character int    `json:"character" description:"1-indexed character offset/column where the symbol is located"`
 }
 
 type LSPGotoDefinitionResult struct {
@@ -463,7 +551,11 @@ func LSPGotoDefinitionHandler(ctx tool.Context, args LSPGotoDefinitionArgs) (LSP
 	}
 
 	workdir := getWorkdir(ctx)
-	client, err := getLSPClient(workdir)
+	lang := languageFromPath(resolvedPath)
+	if lang == "" {
+		return LSPGotoDefinitionResult{Success: false, Message: "Could not detect language from file extension"}, nil
+	}
+	client, err := getLSPClient(workdir, lang)
 	if err != nil {
 		return LSPGotoDefinitionResult{Success: false}, WrapToolError("lsp_goto_definition", args, err)
 	}
@@ -485,7 +577,7 @@ func LSPGotoDefinitionHandler(ctx tool.Context, args LSPGotoDefinitionArgs) (LSP
 
 	locs, err := parseLocations(resp.Result)
 	if err != nil || len(locs) == 0 {
-		return LSPGotoDefinitionResult{Success: false, Message: "未找到符号的定义位置"}, nil
+		return LSPGotoDefinitionResult{Success: false, Message: "Symbol definition not found"}, nil
 	}
 
 	targetFile := uriToPath(locs[0].URI)
@@ -497,7 +589,7 @@ func LSPGotoDefinitionHandler(ctx tool.Context, args LSPGotoDefinitionArgs) (LSP
 
 	return LSPGotoDefinitionResult{
 		Success: true,
-		Message: fmt.Sprintf("✅ 成功找到符号定义：%s 在第 %d 行", relTarget, startL),
+		Message: fmt.Sprintf("Symbol definition found: %s at line %d", relTarget, startL),
 		File:    relTarget,
 		Line:    startL,
 		Snippet: snippet,
@@ -509,9 +601,9 @@ func LSPGotoDefinitionHandler(ctx tool.Context, args LSPGotoDefinitionArgs) (LSP
 }
 
 type LSPFindReferencesArgs struct {
-	Path      string `json:"path" description:"当前文件相对或绝对路径"`
-	Line      int    `json:"line" description:"1-indexed 符号所在的行号"`
-	Character int    `json:"character" description:"1-indexed 符号所在的字符偏移/列号"`
+	Path      string `json:"path" description:"Current file relative or absolute path"`
+	Line      int    `json:"line" description:"1-indexed line number where the symbol is located"`
+	Character int    `json:"character" description:"1-indexed character offset/column where the symbol is located"`
 }
 
 type LSPReferenceEntry struct {
@@ -534,7 +626,11 @@ func LSPFindReferencesHandler(ctx tool.Context, args LSPFindReferencesArgs) (LSP
 	}
 
 	workdir := getWorkdir(ctx)
-	client, err := getLSPClient(workdir)
+	lang := languageFromPath(resolvedPath)
+	if lang == "" {
+		return LSPFindReferencesResult{Success: false}, WrapToolError("lsp_find_references", args, fmt.Errorf("could not detect language from file extension"))
+	}
+	client, err := getLSPClient(workdir, lang)
 	if err != nil {
 		return LSPFindReferencesResult{Success: false}, WrapToolError("lsp_find_references", args, err)
 	}
@@ -595,7 +691,7 @@ func LSPFindReferencesHandler(ctx tool.Context, args LSPFindReferencesArgs) (LSP
 }
 
 type LSPDocumentSymbolsArgs struct {
-	Path string `json:"path" description:"目标文件相对或绝对路径"`
+	Path string `json:"path" description:"Target file relative or absolute path"`
 }
 
 type LSPDocumentSymbolsResult struct {
@@ -611,7 +707,11 @@ func LSPDocumentSymbolsHandler(ctx tool.Context, args LSPDocumentSymbolsArgs) (L
 	}
 
 	workdir := getWorkdir(ctx)
-	client, err := getLSPClient(workdir)
+	lang := languageFromPath(resolvedPath)
+	if lang == "" {
+		return LSPDocumentSymbolsResult{Success: false}, WrapToolError("lsp_document_symbols", args, fmt.Errorf("could not detect language from file extension"))
+	}
+	client, err := getLSPClient(workdir, lang)
 	if err != nil {
 		return LSPDocumentSymbolsResult{Success: false}, WrapToolError("lsp_document_symbols", args, err)
 	}

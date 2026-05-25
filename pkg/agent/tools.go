@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
+
+	"iroha/pkg/config"
 )
 
 // WrapToolError enriches tool errors with actionable self-correction suggestions for the LLM
@@ -135,10 +137,26 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	editTool, err := functiontool.New(functiontool.Config{
+		Name:        "file_edit",
+		Description: "Edit a file by replacing exact text matches. Supports single and replace-all modes with optional dry-run preview.",
+	}, FileEditHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	grepTool, err := functiontool.New(functiontool.Config{
 		Name:        "search_grep",
 		Description: "Perform a global regex text search across the current directory, similar to grep/ripgrep.",
 	}, GrepHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	findTool, err := functiontool.New(functiontool.Config{
+		Name:        "find_files",
+		Description: "Find files matching a glob pattern. Supports ** for recursive matching. Excludes .git, node_modules, etc.",
+	}, FindHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -416,10 +434,23 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	// s21 LSP Tools
+	// s21 LSP Tools — load user LSP server config if available
+	if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
+		servers := make([]LSPServerConfig, len(cfg.LSPServers))
+		for i, s := range cfg.LSPServers {
+			servers[i] = LSPServerConfig{
+				Language:     s.Language,
+				Command:      s.Command,
+				Args:         s.Args,
+				FilePatterns: s.FilePatterns,
+			}
+		}
+		SetLSPServers(servers)
+	}
+
 	lspGotoDefinitionTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_goto_definition",
-		Description: "Locate the declaration and definition of a symbol at a specific line and column position in the current Go workspace via LSP/gopls. Returns the defining file path, line number, and code snippet preview.",
+		Description: "Locate the declaration and definition of a symbol at a specific line and column position via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers. Returns the defining file path, line number, and code snippet preview.",
 	}, LSPGotoDefinitionHandler)
 	if err != nil {
 		return nil, err
@@ -427,7 +458,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	lspFindReferencesTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_find_references",
-		Description: "Find all references and usages of a symbol at a specific position across the current Go workspace via LSP/gopls.",
+		Description: "Find all references and usages of a symbol at a specific position across the workspace via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.",
 	}, LSPFindReferencesHandler)
 	if err != nil {
 		return nil, err
@@ -435,14 +466,14 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	lspDocumentSymbolsTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_document_symbols",
-		Description: "Extract and list all semantic symbols (classes, structs, methods, functions, variables, etc.) from a specified Go file via LSP/gopls.",
+		Description: "Extract and list all semantic symbols (classes, structs, methods, functions, variables, etc.) from a specified file via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.",
 	}, LSPDocumentSymbolsHandler)
 	if err != nil {
 		return nil, err
 	}
 
 	resTools := []tool.Tool{
-		readTool, writeTool, listDirTool, grepTool, shellTool, todoTool,
+		readTool, writeTool, editTool, listDirTool, grepTool, findTool, shellTool, todoTool,
 		memorySaveTool, memoryListTool,
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,

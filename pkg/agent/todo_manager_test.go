@@ -14,9 +14,9 @@ func TestTodoManager_Update(t *testing.T) {
 
 	// 1. Successful update
 	validItems := []TodoItem{
-		{Content: "分析系统架构", Status: "completed"},
-		{Content: "修改配置文件", Status: "in_progress", ActiveForm: "正在写入 config.go"},
-		{Content: "运行单元测试", Status: "pending"},
+		{Content: "Analyze system architecture", Status: "completed"},
+		{Content: "Modify config file", Status: "in_progress", ActiveForm: "Writing config.go"},
+		{Content: "Run unit tests", Status: "pending"},
 	}
 
 	err := tm.Update(validItems)

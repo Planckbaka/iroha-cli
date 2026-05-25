@@ -195,7 +195,7 @@ func TestBlockingConfirmationTool_PermissionDeny(t *testing.T) {
 		t.Errorf("Expected nil result, got %+v", res)
 	}
 
-	if !strings.Contains(err.Error(), "安全策略拒绝") {
+	if !strings.Contains(err.Error(), "security policy") {
 		t.Errorf("Expected safety policy rejection error, got: %v", err)
 	}
 }

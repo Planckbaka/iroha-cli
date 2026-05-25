@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-05-23 | Updated: 2026-05-23 -->
+<!-- Generated: 2026-05-23 | Updated: 2026-05-25 -->
 
 # agent
 
@@ -38,7 +38,7 @@ Core agent orchestration: runner lifecycle, SWE tool definitions (30+ tools), hu
 | `mcp.go` | `MCPClient` + `MCPToolRouter` — stdio-based JSON-RPC 2.0 lifecycle over child processes, dynamic tool discovery and ADK wrapping, plugins loaded from `.iroha/plugins.json` |
 | `worktree.go` | `WorktreeManager` — git worktree creation/removal/keep, JSON index + JSONL event log, cascading task status updates on closeout |
 | `auto_review.go` | Hybrid safety review for `shell_run`: heuristic rules first, then LLM semantic analysis, then local dangerous-pattern double-check |
-| `compaction.go` | Conversation micro-compaction and archival — large tool outputs archived to transcripts, conversation summarization |
+| `compaction.go` | Conversation micro-compaction and archival — large tool outputs archived to transcripts, LLM-based conversational summarization (falls back to text extraction when no LLM provided) |
 | `diff.go` | LCS-based unified diff generator for file edit previews |
 | `ci_watcher.go` | GitHub Actions CI status monitoring via `gh` CLI |
 | `logger.go` | Dual JSONL + plaintext audit logger with secret redaction |

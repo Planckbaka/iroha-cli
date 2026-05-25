@@ -84,13 +84,23 @@ type anthropicTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	Messages  []anthropicMessage `json:"messages"`
-	System    string             `json:"system,omitempty"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	Stream    bool               `json:"stream"`
+	Model     string                 `json:"model"`
+	MaxTokens int                    `json:"max_tokens"`
+	Messages  []anthropicMessage     `json:"messages"`
+	System    []anthropicSystemBlock `json:"system,omitempty"`
+	Tools     []anthropicTool        `json:"tools,omitempty"`
+	Stream    bool                   `json:"stream"`
 }
 
 type anthropicUsage struct {
@@ -201,12 +211,21 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 			toolNames = append(toolNames, t.Name)
 		}
 		DebugLog("[Anthropic] Sending %d tools: %v | Model: %s", len(tools), toolNames, a.modelName)
+		// Build system blocks with prompt caching on the last block
+		var systemBlocks []anthropicSystemBlock
+		if systemPrompt != "" {
+			systemBlocks = append(systemBlocks, anthropicSystemBlock{
+				Type:         "text",
+				Text:         systemPrompt,
+				CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+			})
+		}
 		// Build request
 		anthropicReq := anthropicRequest{
 			Model:     a.modelName,
 			MaxTokens: 8192,
 			Messages:  messages,
-			System:    systemPrompt,
+			System:    systemBlocks,
 			Tools:     tools,
 			Stream:    true,
 		}
