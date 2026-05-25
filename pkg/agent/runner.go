@@ -1002,7 +1002,6 @@ func init() {
 	pendingEditSnapshots.snapshots = make(map[string]string)
 }
 
-
 // rollbackPendingEdits restores all files to their pre-edit state and clears snapshots.
 func rollbackPendingEdits() {
 	pendingEditSnapshots.mu.Lock()
