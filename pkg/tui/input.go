@@ -55,7 +55,7 @@ func (hm *HistoryManager) Down() string {
 // SetupTextInput initializes the prompt textinput.Model
 func SetupTextInput() textinput.Model {
 	ti := textinput.New()
-	ti.Placeholder = "在此输入提示词以指引 Agent..."
+	ti.Placeholder = "Enter prompt to guide the Agent..."
 	ti.Focus()
 	ti.CharLimit = 1000
 	ti.Width = 60

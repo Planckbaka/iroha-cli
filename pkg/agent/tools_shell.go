@@ -15,12 +15,12 @@ import (
 
 // 4. shell_run (需要极其严格的人机确认)
 type ShellRunArgs struct {
-	Command string `json:"command" description:"要执行的本地 Shell 命令"`
+	Command string `json:"command" description:"The local shell command to execute"`
 }
 
 type ShellRunResult struct {
-	Output   string `json:"output" description:"命令的标准输出和标准错误输出合并内容"`
-	ExitCode int    `json:"exit_code" description:"退出状态码"`
+	Output   string `json:"output" description:"Combined stdout and stderr output of the command"`
+	ExitCode int    `json:"exit_code" description:"Exit status code"`
 }
 
 const shellRunTimeout = 30 * time.Second
@@ -85,12 +85,12 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 
 	outputStr := outBuf.String()
 	if runCtx.Err() == context.DeadlineExceeded {
-		outputStr += "\n[超时] 命令执行超过 30 秒，已被强制终止。"
+		outputStr += "\n[Timeout] Command execution exceeded 30 seconds and was forcefully terminated."
 		exitCode = -1
 	}
 
 	if exitCode != 0 {
-		wrappedErr := WrapToolError("shell_run", args, fmt.Errorf("命令运行失败 (exit code %d)", exitCode))
+		wrappedErr := WrapToolError("shell_run", args, fmt.Errorf("command failed (exit code %d)", exitCode))
 		outputStr += "\n" + wrappedErr.Error()
 	}
 
@@ -102,7 +102,7 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 
 // BackgroundRunArgs represents arguments for background_run.
 type BackgroundRunArgs struct {
-	Command string `json:"command" description:"要在后台线程执行的 Shell 命令。立刻返回 task_id。"`
+	Command string `json:"command" description:"The shell command to execute in a background thread. Returns a task_id immediately."`
 }
 
 type BackgroundRunResult struct {
@@ -123,7 +123,7 @@ func BackgroundRunHandler(ctx tool.Context, args BackgroundRunArgs) (BackgroundR
 
 // CheckBackgroundArgs represents arguments for check_background.
 type CheckBackgroundArgs struct {
-	TaskID string `json:"task_id,omitempty" description:"可选。特定后台任务 ID。如果省略，列出所有后台任务状态。"`
+	TaskID string `json:"task_id,omitempty" description:"Optional. A specific background task ID. If omitted, lists all background task statuses."`
 }
 
 type CheckBackgroundResult struct {

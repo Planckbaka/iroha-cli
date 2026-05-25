@@ -8,9 +8,9 @@ import (
 )
 
 type SpawnTeammateArgs struct {
-	Name         string `json:"name" description:"特工代理人唯一名称"`
-	Role         string `json:"role" description:"负责分工的角色，如 database, frontend"`
-	SystemPrompt string `json:"system_prompt" description:"系统指令"`
+	Name         string `json:"name" description:"Unique teammate agent name"`
+	Role         string `json:"role" description:"Role assignment, e.g. database, frontend"`
+	SystemPrompt string `json:"system_prompt" description:"System instructions"`
 }
 
 type SpawnTeammateResult struct {
@@ -27,7 +27,7 @@ func SpawnTeammateHandler(ctx tool.Context, args SpawnTeammateArgs) (SpawnTeamma
 	if err != nil {
 		return SpawnTeammateResult{Success: false}, WrapToolError("spawn_teammate", args, err)
 	}
-	return SpawnTeammateResult{Success: true, Message: fmt.Sprintf("✅ 特工代理人 %s 已成功启动在后台", args.Name)}, nil
+	return SpawnTeammateResult{Success: true, Message: fmt.Sprintf("Teammate %s successfully started in background", args.Name)}, nil
 }
 
 type ListTeammatesArgs struct{}
@@ -45,8 +45,8 @@ func ListTeammatesHandler(ctx tool.Context, args ListTeammatesArgs) (ListTeammat
 }
 
 type SendMessageArgs struct {
-	Recipient string `json:"recipient" description:"接收消息的特工代理人名称"`
-	Content   string `json:"content" description:"发送的消息文本内容"`
+	Recipient string `json:"recipient" description:"Name of the teammate agent to receive the message"`
+	Content   string `json:"content" description:"Message text content to send"`
 }
 
 type SendMessageResult struct {
@@ -64,11 +64,11 @@ func SendMessageHandler(ctx tool.Context, args SendMessageArgs) (SendMessageResu
 	if err != nil {
 		return SendMessageResult{Success: false}, WrapToolError("send_message", args, err)
 	}
-	return SendMessageResult{Success: true, Message: fmt.Sprintf("✅ 消息已发送至 %s", args.Recipient)}, nil
+	return SendMessageResult{Success: true, Message: fmt.Sprintf("Message sent to %s", args.Recipient)}, nil
 }
 
 type ReadInboxArgs struct {
-	Name string `json:"name" description:"特工代理人的名称"`
+	Name string `json:"name" description:"Teammate agent name"`
 }
 
 type ReadInboxResult struct {
@@ -84,7 +84,7 @@ func ReadInboxHandler(ctx tool.Context, args ReadInboxArgs) (ReadInboxResult, er
 }
 
 type BroadcastArgs struct {
-	Content string `json:"content" description:"广播至全体特工的文本消息"`
+	Content string `json:"content" description:"Text message to broadcast to all teammates"`
 }
 
 type BroadcastResult struct {
@@ -97,15 +97,15 @@ func BroadcastHandler(ctx tool.Context, args BroadcastArgs) (BroadcastResult, er
 	if err != nil {
 		return BroadcastResult{Success: false}, WrapToolError("broadcast", args, err)
 	}
-	return BroadcastResult{Success: true, Message: "✅ 广播消息已发送给所有特工成员"}, nil
+	return BroadcastResult{Success: true, Message: "Broadcast message sent to all teammates"}, nil
 }
 
 // ─── Protocol tool handlers (s16) ──────────────────────────────────────────
 
 type ProtocolShutdownRequestArgs struct {
-	Sender   string `json:"sender" description:"请求的发起特工名称"`
-	Receiver string `json:"receiver" description:"接收请求的特工名称"`
-	Reason   string `json:"reason" description:"请求停机的缘由说明"`
+	Sender   string `json:"sender" description:"Name of the teammate initiating the request"`
+	Receiver string `json:"receiver" description:"Name of the teammate receiving the request"`
+	Reason   string `json:"reason" description:"Reason for the shutdown request"`
 }
 
 type ProtocolShutdownRequestResult struct {
@@ -122,9 +122,9 @@ func ProtocolShutdownRequestHandler(ctx tool.Context, args ProtocolShutdownReque
 }
 
 type ProtocolShutdownResponseArgs struct {
-	RequestID string `json:"request_id" description:"待确认的停机请求 ID"`
-	Approved  bool   `json:"approved" description:"是否同意停机"`
-	Comment   string `json:"comment,omitempty" description:"审批评语"`
+	RequestID string `json:"request_id" description:"The shutdown request ID to confirm"`
+	Approved  bool   `json:"approved" description:"Whether to approve the shutdown"`
+	Comment   string `json:"comment,omitempty" description:"Approval comment"`
 }
 
 type ProtocolShutdownResponseResult struct {
@@ -141,9 +141,9 @@ func ProtocolShutdownResponseHandler(ctx tool.Context, args ProtocolShutdownResp
 }
 
 type ProtocolPlanApprovalRequestArgs struct {
-	Sender   string `json:"sender" description:"发起方案审批的特工名称"`
-	Receiver string `json:"receiver" description:"负责审批方案的特工名称"`
-	Plan     string `json:"plan" description:"拟审批的详细方案或步骤清单"`
+	Sender   string `json:"sender" description:"Name of the teammate submitting the plan for approval"`
+	Receiver string `json:"receiver" description:"Name of the teammate responsible for approving the plan"`
+	Plan     string `json:"plan" description:"Detailed plan or step list to be approved"`
 }
 
 type ProtocolPlanApprovalRequestResult struct {
@@ -160,9 +160,9 @@ func ProtocolPlanApprovalRequestHandler(ctx tool.Context, args ProtocolPlanAppro
 }
 
 type ProtocolPlanApprovalResponseArgs struct {
-	RequestID string `json:"request_id" description:"待审批的方案请求 ID"`
-	Approved  bool   `json:"approved" description:"是否批准此方案"`
-	Comment   string `json:"comment,omitempty" description:"修改意见或评语"`
+	RequestID string `json:"request_id" description:"The plan approval request ID to respond to"`
+	Approved  bool   `json:"approved" description:"Whether to approve this plan"`
+	Comment   string `json:"comment,omitempty" description:"Revision feedback or comment"`
 }
 
 type ProtocolPlanApprovalResponseResult struct {
@@ -181,8 +181,8 @@ func ProtocolPlanApprovalResponseHandler(ctx tool.Context, args ProtocolPlanAppr
 // ─── Autonomous agent tool handlers (s17) ──────────────────────────────────
 
 type AgentClaimTaskArgs struct {
-	TeammateName string   `json:"teammate_name" description:"声明认领任务的特工名称"`
-	Keywords     []string `json:"keywords" description:"匹配任务标题的主题关键字列表"`
+	TeammateName string   `json:"teammate_name" description:"Name of the teammate claiming tasks"`
+	Keywords     []string `json:"keywords" description:"List of topic keywords to match against task titles"`
 }
 
 type AgentClaimTaskResult struct {
@@ -198,7 +198,7 @@ func AgentClaimTaskHandler(ctx tool.Context, args AgentClaimTaskArgs) (AgentClai
 }
 
 type AgentSetStateArgs struct {
-	State string `json:"state" description:"状态，可选：WORK, IDLE"`
+	State string `json:"state" description:"Agent state. Options: WORK, IDLE"`
 }
 
 type AgentSetStateResult struct {

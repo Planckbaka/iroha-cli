@@ -8,13 +8,13 @@ import (
 
 // TaskCreateArgs represents arguments for task_create tool.
 type TaskCreateArgs struct {
-	ID          string   `json:"id" description:"任务唯一标识，如 t1, task-setup"`
-	Subject     string   `json:"subject" description:"任务主题/简短摘要"`
-	Description string   `json:"description,omitempty" description:"任务详细描述"`
-	Status      string   `json:"status,omitempty" description:"任务状态，默认为 pending，可选：pending, in_progress, completed"`
-	BlockedBy   []string `json:"blockedBy,omitempty" description:"依赖的前置任务 ID 列表"`
-	Blocks      []string `json:"blocks,omitempty" description:"该任务阻塞的后续任务 ID 列表"`
-	Owner       string   `json:"owner,omitempty" description:"任务负责人，默认为 agent，可选：agent, user"`
+	ID          string   `json:"id" description:"Unique task identifier, e.g. t1, task-setup"`
+	Subject     string   `json:"subject" description:"Task subject or short summary"`
+	Description string   `json:"description,omitempty" description:"Detailed task description"`
+	Status      string   `json:"status,omitempty" description:"Task status, defaults to pending. Options: pending, in_progress, completed"`
+	BlockedBy   []string `json:"blockedBy,omitempty" description:"List of upstream dependency task IDs"`
+	Blocks      []string `json:"blocks,omitempty" description:"List of downstream task IDs blocked by this task"`
+	Owner       string   `json:"owner,omitempty" description:"Task owner, defaults to agent. Options: agent, user"`
 }
 
 type TaskCreateResult struct {
@@ -43,18 +43,18 @@ func TaskCreateHandler(ctx tool.Context, args TaskCreateArgs) (TaskCreateResult,
 	if err := GlobalTaskManager.SaveTask(task); err != nil {
 		return TaskCreateResult{Success: false, Message: err.Error()}, WrapToolError("task_create", args, err)
 	}
-	return TaskCreateResult{Success: true, Message: fmt.Sprintf("✅ 任务已创建: %s", task.ID)}, nil
+	return TaskCreateResult{Success: true, Message: fmt.Sprintf("Task created: %s", task.ID)}, nil
 }
 
 // TaskUpdateArgs represents arguments for task_update tool.
 type TaskUpdateArgs struct {
-	ID          string   `json:"id" description:"要更新的任务唯一标识"`
-	Subject     string   `json:"subject,omitempty" description:"新的任务主题"`
-	Description string   `json:"description,omitempty" description:"新的任务描述"`
-	Status      string   `json:"status,omitempty" description:"新的任务状态，可选：pending, in_progress, completed, deleted"`
-	BlockedBy   []string `json:"blockedBy,omitempty" description:"新的前置依赖任务 ID 列表（若传入，则完全覆盖原有列表）"`
-	Blocks      []string `json:"blocks,omitempty" description:"新的后续依赖任务 ID 列表（若传入，则完全覆盖原有列表）"`
-	Owner       string   `json:"owner,omitempty" description:"新的负责人"`
+	ID          string   `json:"id" description:"Unique task identifier to update"`
+	Subject     string   `json:"subject,omitempty" description:"New task subject"`
+	Description string   `json:"description,omitempty" description:"New task description"`
+	Status      string   `json:"status,omitempty" description:"New task status. Options: pending, in_progress, completed, deleted"`
+	BlockedBy   []string `json:"blockedBy,omitempty" description:"New upstream dependency task ID list (if provided, fully replaces the existing list)"`
+	Blocks      []string `json:"blocks,omitempty" description:"New downstream dependency task ID list (if provided, fully replaces the existing list)"`
+	Owner       string   `json:"owner,omitempty" description:"New task owner"`
 }
 
 type TaskUpdateResult struct {
@@ -65,7 +65,7 @@ type TaskUpdateResult struct {
 func TaskUpdateHandler(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult, error) {
 	existing, err := GlobalTaskManager.GetTask(args.ID)
 	if err != nil {
-		return TaskUpdateResult{Success: false, Message: fmt.Sprintf("任务未找到: %s", args.ID)}, WrapToolError("task_update", args, err)
+		return TaskUpdateResult{Success: false, Message: fmt.Sprintf("Task not found: %s", args.ID)}, WrapToolError("task_update", args, err)
 	}
 
 	if args.Subject != "" {
@@ -90,7 +90,7 @@ func TaskUpdateHandler(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult,
 	if err := GlobalTaskManager.SaveTask(existing); err != nil {
 		return TaskUpdateResult{Success: false, Message: err.Error()}, WrapToolError("task_update", args, err)
 	}
-	return TaskUpdateResult{Success: true, Message: fmt.Sprintf("✅ 任务已更新: %s", args.ID)}, nil
+	return TaskUpdateResult{Success: true, Message: fmt.Sprintf("Task updated: %s", args.ID)}, nil
 }
 
 // TaskListArgs representing arguments for task_list.
@@ -110,7 +110,7 @@ func TaskListHandler(ctx tool.Context, args TaskListArgs) (TaskListResult, error
 
 // TaskGetArgs representing arguments for task_get.
 type TaskGetArgs struct {
-	ID string `json:"id" description:"任务唯一标识"`
+	ID string `json:"id" description:"Unique task identifier"`
 }
 
 type TaskGetResult struct {

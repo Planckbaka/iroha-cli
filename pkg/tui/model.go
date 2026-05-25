@@ -113,6 +113,7 @@ var AllSlashCommands = []SlashMenuItem{
 	{"/mcp", "查看 MCP 插件状态"},
 	{"/bg", "查看后台任务状态"},
 	{"/sessions", "查看和切换会话历史"},
+		{"/resume", "恢复最近一次会话，继续对话"},
 	{"/help", "查看系统使用帮助、键盘快捷键与指令面板"},
 	{"/commands", "查看所有支持的斜杠快捷指令列表"},
 	{"/doctor", "运行系统开发环境诊断，检测 API、网络、Git 与工具链状态"},
@@ -138,6 +139,9 @@ type Model struct {
 	Cancel             context.CancelFunc
 	ProgramRef         *ProgramRef
 	LastError          error
+
+	// Clipboard copy
+	LastRawResponse string
 
 	// Phase 2 display metrics
 	ActiveTool        agent.ToolStatus
@@ -426,6 +430,7 @@ func (m *Model) finalizeTurn() tea.Cmd {
 		agentLog = StyleAgentMsg.Render(RenderErrorCard(m.LastError))
 		m.LastError = nil // Reset
 	} else {
+		m.LastRawResponse = m.StreamedText
 		agentLog = StyleAgentMsg.Render(RenderMarkdown(m.StreamedText))
 	}
 

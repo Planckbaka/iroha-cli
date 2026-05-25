@@ -13,11 +13,11 @@ import (
 
 // 1. file_read
 type FileReadArgs struct {
-	Path string `json:"path" description:"要读取的文件路径（相对或绝对路径）"`
+	Path string `json:"path" description:"The file path to read (relative or absolute)"`
 }
 
 type FileReadResult struct {
-	Content string `json:"content" description:"文件内容"`
+	Content string `json:"content" description:"The file contents"`
 }
 
 const maxFileReadSize = 10 * 1024 * 1024 // 10MB
@@ -29,30 +29,30 @@ func FileReadHandler(ctx tool.Context, args FileReadArgs) (FileReadResult, error
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
+		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("failed to read file: %w", err))
 	}
 	if info.IsDir() {
-		return FileReadResult{}, fmt.Errorf("'%s' 是一个目录，不是文件。请使用 shell_run 执行 ls 或 find 命令来查看目录结构", args.Path)
+		return FileReadResult{}, fmt.Errorf("'%s' is a directory, not a file. Use shell_run with ls or find to explore directory structure", args.Path)
 	}
 	if info.Size() > maxFileReadSize {
-		return FileReadResult{}, fmt.Errorf("文件 '%s' 大小为 %d 字节，超过 10MB 读取限制。请使用 shell_run 配合 head/tail 来分段读取", args.Path, info.Size())
+		return FileReadResult{}, fmt.Errorf("file '%s' is %d bytes, exceeding the 10MB read limit. Use shell_run with head/tail to read in chunks", args.Path, info.Size())
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
+		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("failed to read file: %w", err))
 	}
 	return FileReadResult{Content: string(data)}, nil
 }
 
 // 2. file_write (需要人机确认)
 type FileWriteArgs struct {
-	Path    string `json:"path" description:"要写入的文件路径"`
-	Content string `json:"content" description:"要写入的文本内容"`
+	Path    string `json:"path" description:"The file path to write to"`
+	Content string `json:"content" description:"The text content to write"`
 }
 
 type FileWriteResult struct {
-	Success bool `json:"success" description:"是否写入成功"`
+	Success bool `json:"success" description:"Whether the write succeeded"`
 }
 
 func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
@@ -64,25 +64,25 @@ func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, er
 	dir := filepath.Dir(resolved)
 	if dir != "." && dir != "/" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("创建父目录失败: %w", err))
+			return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("failed to create parent directory: %w", err))
 		}
 	}
 
 	err := os.WriteFile(resolved, []byte(args.Content), 0644)
 	if err != nil {
-		return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("写入文件失败: %w", err))
+		return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("failed to write file: %w", err))
 	}
 	return FileWriteResult{Success: true}, nil
 }
 
 // 3. list_directory
 type ListDirArgs struct {
-	Path     string `json:"path" description:"要列出的目录路径（默认为当前工作目录）"`
-	MaxDepth int    `json:"max_depth,omitempty" description:"递归深度（默认 1，仅当前层级；最大 4）"`
+	Path     string `json:"path" description:"The directory path to list (defaults to current working directory)"`
+	MaxDepth int    `json:"max_depth,omitempty" description:"Recursive depth (default 1, current level only; max 4)"`
 }
 
 type ListDirResult struct {
-	Entries []string `json:"entries" description:"目录条目列表（带 / 后缀表示子目录）"`
+	Entries []string `json:"entries" description:"List of directory entries (subdirectories have / suffix)"`
 }
 
 func ListDirHandler(ctx tool.Context, args ListDirArgs) (ListDirResult, error) {
@@ -150,11 +150,11 @@ func ListDirHandler(ctx tool.Context, args ListDirArgs) (ListDirResult, error) {
 
 // 4. search_grep
 type GrepArgs struct {
-	Pattern string `json:"pattern" description:"正则表达式搜索模式"`
+	Pattern string `json:"pattern" description:"The regex search pattern"`
 }
 
 type GrepResult struct {
-	Matches []string `json:"matches" description:"匹配到的行列表"`
+	Matches []string `json:"matches" description:"List of matched lines"`
 }
 
 var grepExcludedDirs = map[string]bool{
@@ -168,7 +168,7 @@ const maxGrepFileSize = 1 * 1024 * 1024 // 1MB
 func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
-		return GrepResult{}, fmt.Errorf("无效的正则表达式: %w", err)
+		return GrepResult{}, fmt.Errorf("invalid regex pattern: %w", err)
 	}
 
 	var matches []string

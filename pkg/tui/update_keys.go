@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"github.com/atotto/clipboard"
+	"github.com/aymanbagabas/go-osc52/v2"
 )
 
 // handleKeyMsg processes key press events depending on TUI state
@@ -202,6 +205,28 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 	switch msg.Type {
 
+	case tea.KeyCtrlY:
+		if m.LastRawResponse == "" {
+			m.History = append(m.History, StyleKeyHelp.Render("[hint] No AI response available to copy"))
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		}
+		text := m.LastRawResponse
+		seq := osc52.New(text)
+		if strings.HasPrefix(os.Getenv("TERM"), "tmux") {
+			seq = seq.Tmux()
+		}
+		fmt.Fprint(os.Stderr, seq.String())
+		if err := clipboard.WriteAll(text); err != nil {
+			// OSC 52 via stderr is the primary method; atotto is best-effort local fallback
+			_ = err
+		}
+		m.History = append(m.History, StyleToolSuccess.Render(fmt.Sprintf("Copied to clipboard (%d chars)", len(text))))
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
+		return m, nil, true
+
 	case tea.KeyPgUp:
 		m.Viewport.HalfPageUp()
 		return m, nil, true
@@ -355,27 +380,27 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		m.TextArea.SetValue("")
 		m.TextArea.SetHeight(2)
 
-		warningMsg := lipgloss.NewStyle().Foreground(ColorWarning).Render("[已弃用] 建议使用统一的 /permission 命令。")
+		warningMsg := lipgloss.NewStyle().Foreground(ColorWarning).Render("[Deprecated] Please use the unified /permission command.")
 		var replyLog string
 
 		if len(parts) < 2 {
-			replyLog = warningMsg + "\n" + StyleToolError.Render("[error] 请指定权限等级: /permission <plan | auto | default>")
+			replyLog = warningMsg + "\n" + StyleToolError.Render("[error] Please specify a permission level: /permission <plan | auto | default>")
 		} else {
 			modeArg := agent.PermissionMode(strings.ToLower(parts[1]))
 			err := agent.GlobalPermissionManager.SetMode(modeArg)
 			if err != nil {
-				replyLog = warningMsg + "\n" + StyleToolError.Render(fmt.Sprintf("[error] 无效的权限等级: %s。可选模式: default, plan, auto", parts[1]))
+				replyLog = warningMsg + "\n" + StyleToolError.Render(fmt.Sprintf("[error] Invalid permission level: %s. Available modes: default, plan, auto", parts[1]))
 			} else {
 				var desc string
 				switch modeArg {
 				case agent.ModePlan:
-					desc = "(只读模式，拦截所有写操作)"
+					desc = "(Read-only mode, blocks all write operations)"
 				case agent.ModeAuto:
-					desc = "(读操作自动同意，写操作仍需授权)"
+					desc = "(Read operations auto-approved, write operations still require authorization)"
 				default:
-					desc = "(每次非匹配规则的敏感操作均需授权)"
+					desc = "(Each sensitive operation not matching a rule requires authorization)"
 				}
-				replyLog = warningMsg + "\n" + StyleToolSuccess.Render(fmt.Sprintf("权限等级已成功切换为: %s %s", modeArg, desc))
+				replyLog = warningMsg + "\n" + StyleToolSuccess.Render(fmt.Sprintf("Permission level switched to: %s %s", modeArg, desc))
 			}
 		}
 		m.History = append(m.History, userLog, replyLog)
@@ -424,7 +449,7 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 			replyLog := StyleToolSuccess.Render("hooks reloaded")
 			sources := agent.GlobalHookManager.GetSources()
 			if len(sources) > 0 {
-				replyLog += "\n" + StyleKeyHelp.Render("已加载配置文件: "+strings.Join(sources, ", "))
+				replyLog += "\n" + StyleKeyHelp.Render("Loaded config files: "+strings.Join(sources, ", "))
 			}
 			m.History = append(m.History, userLog, replyLog)
 			m.TextArea.SetValue("")
@@ -469,7 +494,7 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 			}
 		}
 
-		sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 输入 /hooks reload 可热重载配置文件"))
+		sb.WriteString("\n  " + StyleKeyHelp.Render("Tip: Type /hooks reload to hot-reload config files"))
 
 		m.History = append(m.History, userLog, sb.String())
 		m.TextArea.SetValue("")
@@ -521,7 +546,7 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 				}
 			}
 		}
-		sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 对话中说「记住…」让 Agent 调用 memory_save | 说「你记得什么」让它调用 memory_list"))
+		sb.WriteString("\n  " + StyleKeyHelp.Render("Tip: Say 'remember...' in conversation to trigger memory_save | Say 'what do you remember' to trigger memory_list"))
 
 		m.History = append(m.History, userLog, sb.String())
 		m.TextArea.SetValue("")
@@ -577,7 +602,7 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 			}
 		}
 
-		sb.WriteString("\n  " + StyleKeyHelp.Render("提示: 输入 /prompt 可查看每个区块的完整内容"))
+		sb.WriteString("\n  " + StyleKeyHelp.Render("Tip: Type /prompt to view the full content of each section"))
 
 		m.History = append(m.History, userLog, sb.String())
 		m.TextArea.SetValue("")
@@ -650,12 +675,70 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 
 		m = m.transitionTo(stateThinking)
 		m.ActiveTool = agent.ToolStatus{
-			Name:    "🩺 环境诊断",
+			Name:    "🩺 Environment Diagnostics",
 			Running: true,
 		}
 		m.RoundStartTime = time.Now()
 
 		return m, runDoctorCmd(), true
+	}
+
+	if cmdName == "/resume" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+
+		if agent.GlobalSessionService == nil {
+			replyLog := StyleToolError.Render("[error] Session service not initialized")
+			m.History = append(m.History, userLog, replyLog)
+			m.TextArea.SetValue("")
+			m.TextArea.SetHeight(2)
+			return m, nil, true
+		}
+
+		list, err := agent.GlobalSessionService.ListSavedSessions()
+		if err != nil || len(list) == 0 {
+			replyLog := StyleToolError.Render("[error] No resumable sessions found")
+			m.History = append(m.History, userLog, replyLog)
+			m.TextArea.SetValue("")
+			m.TextArea.SetHeight(2)
+			return m, nil, true
+		}
+
+		// Find the most recent session that isn't the current one
+		var target *agent.SessionMetadata
+		for i := range list {
+			if list[i].ID != m.SessionID {
+				target = &list[i]
+				break
+			}
+		}
+		if target == nil {
+			replyLog := StyleToolError.Render("[error] No resumable sessions found")
+			m.History = append(m.History, userLog, replyLog)
+			m.TextArea.SetValue("")
+			m.TextArea.SetHeight(2)
+			return m, nil, true
+		}
+
+		m.SessionID = target.ID
+		m.LoadHistoryFromSession(target.ID)
+
+		summary := target.FirstPrompt
+		if len(summary) > 60 {
+			summary = summary[:60] + "…"
+		}
+		replyLog := StyleToolSuccess.Render(fmt.Sprintf("Resumed session: %s", target.ID[:8])) +
+			"\n" + StyleKeyHelp.Render(fmt.Sprintf("First message: %s", summary)) +
+			"\n" + StyleKeyHelp.Render(fmt.Sprintf("Tokens: ~%s | Updated: %s",
+				fmt.Sprintf("%d", target.TotalTokens),
+				target.LastUpdateTime.Format("01-02 15:04")))
+
+		m.History = append(m.History, userLog, replyLog)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
+		return m, nil, true
 	}
 
 	if cmdName == "/sessions" {
@@ -688,18 +771,18 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		err := agent.GlobalPermissionManager.SetMode(modeArg)
 		var replyLog string
 		if err != nil {
-			replyLog = StyleToolError.Render(fmt.Sprintf("[error] 无效的权限等级: %s。可选模式: default, plan, auto", parts[1]))
+			replyLog = StyleToolError.Render(fmt.Sprintf("[error] Invalid permission level: %s. Available modes: default, plan, auto", parts[1]))
 		} else {
 			var desc string
 			switch modeArg {
 			case agent.ModePlan:
-				desc = "(只读模式，拦截所有写操作)"
+				desc = "(Read-only mode, blocks all write operations)"
 			case agent.ModeAuto:
-				desc = "(读操作自动同意，写操作仍需授权)"
+				desc = "(Read operations auto-approved, write operations still require authorization)"
 			default:
-				desc = "(每次非匹配规则的敏感操作均需授权)"
+				desc = "(Each sensitive operation not matching a rule requires authorization)"
 			}
-			replyLog = StyleToolSuccess.Render(fmt.Sprintf("权限等级已成功切换为: %s %s", modeArg, desc))
+			replyLog = StyleToolSuccess.Render(fmt.Sprintf("Permission level switched to: %s %s", modeArg, desc))
 		}
 		m.History = append(m.History, userLog, replyLog)
 		return m, nil, true

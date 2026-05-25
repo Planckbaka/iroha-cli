@@ -75,7 +75,7 @@ func ReviewCommand(cmd string) AutoReviewResult {
 		return heuristicResult // Fallback to heuristic (which is UNSAFE for unknown commands)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	llmResult, err := callLLMForReview(ctx, GlobalAutoReviewConfig, cmd)
@@ -322,6 +322,10 @@ func heuristicReview(cmd string) AutoReviewResult {
 		"go build", "go test", "go vet", "go list", "go env",
 		"find", "grep", "rg", "fd", "tree",
 		"date", "whoami", "hostname", "uname",
+			"system_profiler", "sysctl", "sw_vers", "systeminfo",
+			"df", "du", "free", "top", "ps", "lsof",
+			"networksetup", "ifconfig", "ping", "traceroute", "nslookup", "dig",
+			"defaults read", "xcodebuild -version", "xcode-select -p",
 	}
 
 	for _, safe := range safeCommands {

@@ -1088,6 +1088,7 @@ func RenderHelpDashboard() string {
 		Desc string
 	}{
 		{"Ctrl + C", "中止当前正在进行的思考与工具调用，或退出空闲状态"},
+		{"Ctrl + Y", "复制最后一条 AI 响应到系统剪贴板"},
 		{"Ctrl + D / /exit", "安全保存并退出当前的会话交互"},
 		{"PageUp / PageDown", "在会话内容视窗中向上/向下滚动半页"},
 		{"Esc", "退出会话历史选择器或关闭斜杠指令自动补全补丁"},

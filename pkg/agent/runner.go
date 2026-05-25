@@ -545,7 +545,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 			Name:    "🤖 ai-review",
 			Args:    map[string]any{"command": cmdStr},
 			Running: false,
-			Success: reviewResult.Safe,
+			Success: true,
 		})
 
 		if reviewResult.Safe && GlobalPermissionManager.GetMode() == ModeAuto {

@@ -22,17 +22,17 @@ func WrapToolError(toolName string, args any, err error) error {
 
 	// 1. Check for file not exist
 	if errors.Is(err, os.ErrNotExist) || strings.Contains(errMsg, "no such file or directory") {
-		return fmt.Errorf("%w\n【自我修复建议】请检查文件路径是否正确。如果是拼写错误，请使用 file_read/grep/search_grep 重新确认当前目录结构，或确认目标文件是否存在。", err)
+		return fmt.Errorf("%w\n[Self-repair suggestion] Please verify the file path is correct. If it may be a typo, use file_read/grep/search_grep to confirm the current directory structure or check if the target file exists.", err)
 	}
 
 	// 2. Check for permission issues
 	if errors.Is(err, os.ErrPermission) || strings.Contains(errMsg, "permission denied") {
-		return fmt.Errorf("%w\n【自我修复建议】您似乎没有该路径的读写权限。请尝试写入至工作区（当前目录）下的其他位置，或使用 shell_run 检查权限及目录属性。", err)
+		return fmt.Errorf("%w\n[Self-repair suggestion] You do not have read/write permission for this path. Try writing to a different location within the workspace (current directory), or use shell_run to check permissions and directory attributes.", err)
 	}
 
 	// 3. Command execution failed
 	if toolName == "shell_run" {
-		return fmt.Errorf("%w\n【自我修复建议】如果该命令失败是因为语法错误、参数错误或缺少本地依赖依赖，请先确认本地开发环境。如果缺少某个工具，可以尝试让用户授权安装依赖，或换用其他 Go 命令完成编译或测试工作。", err)
+		return fmt.Errorf("%w\n[Self-repair suggestion] If the command failed due to a syntax error, incorrect arguments, or missing local dependencies, please verify your local development environment first. If a tool is missing, consider asking the user to authorize dependency installation, or use alternative Go commands to compile or test.", err)
 	}
 
 	return err
@@ -64,14 +64,14 @@ func validateSandboxPath(ctx context.Context, rawPath string) error {
 
 	absPath, err := filepath.Abs(rawPath)
 	if err != nil {
-		return fmt.Errorf("无效的路径格式 '%s': %w", rawPath, err)
+		return fmt.Errorf("invalid path format '%s': %w", rawPath, err)
 	}
 
 	cleanCWD := filepath.Clean(cwd)
 	cleanAbs := filepath.Clean(absPath)
 
 	if !strings.HasPrefix(cleanAbs, cleanCWD) {
-		return fmt.Errorf("⚠️ 安全沙箱阻断: 路径 '%s' 超出了工作区根目录范围 '%s'", rawPath, cleanCWD)
+		return fmt.Errorf("security sandbox blocked: path '%s' is outside the workspace root '%s'", rawPath, cleanCWD)
 	}
 	return nil
 }
@@ -91,7 +91,7 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 			abs, err := filepath.Abs(w)
 			if err == nil {
 				if !strings.HasPrefix(filepath.Clean(abs), cleanCWD) {
-					return fmt.Errorf("⚠️ 安全沙箱阻断: 检测到命令中包含越界的相对路径逃逸 '%s'", w)
+					return fmt.Errorf("security sandbox blocked: detected out-of-bounds relative path escape '%s' in command", w)
 				}
 			}
 		}
@@ -109,7 +109,7 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 			if !isSystemSafe {
 				cleanPath := filepath.Clean(w)
 				if !strings.HasPrefix(cleanPath, cleanCWD) {
-					return fmt.Errorf("⚠️ 安全沙箱阻断: 检测到命令试图访问工作区外的绝对路径 '%s'", w)
+					return fmt.Errorf("security sandbox blocked: detected attempt to access absolute path '%s' outside the workspace in command", w)
 				}
 			}
 		}
@@ -121,7 +121,7 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 func GetSWETools() ([]tool.Tool, error) {
 	readTool, err := functiontool.New(functiontool.Config{
 		Name:        "file_read",
-		Description: "读取指定相对或绝对路径的文件内容。",
+		Description: "Read the contents of a file at the specified relative or absolute path.",
 	}, FileReadHandler)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	writeTool, err := functiontool.New(functiontool.Config{
 		Name:        "file_write",
-		Description: "向文件写入指定内容。这会覆盖原文件（如果有的话）。",
+		Description: "Write the specified content to a file. This overwrites the file if it already exists.",
 	}, FileWriteHandler)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	grepTool, err := functiontool.New(functiontool.Config{
 		Name:        "search_grep",
-		Description: "对当前目录进行正则表达式全局文本搜索，类似于 grep/ripgrep。",
+		Description: "Perform a global regex text search across the current directory, similar to grep/ripgrep.",
 	}, GrepHandler)
 	if err != nil {
 		return nil, err
@@ -145,7 +145,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	listDirTool, err := functiontool.New(functiontool.Config{
 		Name:        "list_directory",
-		Description: "列出指定目录下的文件和子目录。支持递归深度控制，自动跳过 .git 等大型排除目录。这是查看项目结构的首选工具。",
+		Description: "List files and subdirectories under the specified directory. Supports recursive depth control and automatically skips large excluded directories like .git. This is the preferred tool for exploring project structure.",
 	}, ListDirHandler)
 	if err != nil {
 		return nil, err
@@ -153,7 +153,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	shellTool, err := functiontool.New(functiontool.Config{
 		Name:        "shell_run",
-		Description: "执行一条 Shell 命令。只允许在当前工作区目录下执行。",
+		Description: "Execute a shell command. Only allowed within the current workspace directory.",
 	}, ShellRunHandler)
 	if err != nil {
 		return nil, err
@@ -161,7 +161,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	todoTool, err := functiontool.New(functiontool.Config{
 		Name:        "todo",
-		Description: "重写或更新当前多步骤工作的会话级规划清单。每次多步骤复杂任务都应该首先调用此工具制定计划，并且在完成某些步骤或进入新步骤时进行更新。强制要求有且仅能有一个任务处于 in_progress 状态。",
+		Description: "Rewrite or update the session-level plan list for the current multi-step task. Always call this tool first to create a plan for complex multi-step tasks, and update it when completing or starting steps. Exactly one task must be in the in_progress state at all times.",
 	}, TodoHandler)
 	if err != nil {
 		return nil, err
@@ -170,7 +170,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 6. memory_save — persist a durable fact across sessions
 	memorySaveTool, err := functiontool.New(functiontool.Config{
 		Name:        "memory_save",
-		Description: "将一条跨会话的持久化记忆条目保存到磁盘。适用于用户偏好、反馈更正、项目约束、外部资源指针等不易从代码库中重新推导出的关键信息。不要用于存储当前任务状态、临时分支名、密钥或任何可从仓库中直接读取的内容。",
+		Description: "Save a persistent memory entry to disk that survives across sessions. Use this for user preferences, feedback corrections, project constraints, external resource pointers, or other critical information that cannot be re-derived from the codebase. Do not use for current task state, temporary branch names, secrets, or anything directly readable from the repository.",
 	}, MemorySaveHandler)
 	if err != nil {
 		return nil, err
@@ -179,7 +179,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 7. memory_list — read all currently loaded memories
 	memoryListTool, err := functiontool.New(functiontool.Config{
 		Name:        "memory_list",
-		Description: "列出当前会话中已加载的所有持久化记忆条目，按类型分组显示（user/feedback/project/reference）。",
+		Description: "List all currently loaded persistent memory entries in the current session, grouped by type (user/feedback/project/reference).",
 	}, MemoryListHandler)
 	if err != nil {
 		return nil, err
@@ -188,7 +188,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 8. task_create
 	taskCreateTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_create",
-		Description: "在持久化任务 DAG 图中创建一个新任务。新任务默认状态为 pending，默认负责人为 agent。",
+		Description: "Create a new task in the persistent task DAG. New tasks default to pending status with agent as the default owner.",
 	}, TaskCreateHandler)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 9. task_update
 	taskUpdateTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_update",
-		Description: "更新持久化任务 DAG 图中的现有任务。可以修改状态、前置依赖或后续依赖。任何依赖环（cycle）都会被 DFS 校验直接拒绝。",
+		Description: "Update an existing task in the persistent task DAG. Can modify status, upstream dependencies (blockedBy), or downstream dependencies (blocks). Any dependency cycles are rejected by DFS validation.",
 	}, TaskUpdateHandler)
 	if err != nil {
 		return nil, err
@@ -206,7 +206,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 10. task_list
 	taskListTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_list",
-		Description: "列出当前持久化任务 DAG 图中所有未删除的任务列表。",
+		Description: "List all non-deleted tasks in the current persistent task DAG.",
 	}, TaskListHandler)
 	if err != nil {
 		return nil, err
@@ -215,7 +215,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 11. task_get
 	taskGetTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_get",
-		Description: "根据任务 ID 获取特定任务的详细记录，包含前置/后续依赖与执行状态。",
+		Description: "Get detailed information for a specific task by its ID, including upstream/downstream dependencies and execution status.",
 	}, TaskGetHandler)
 	if err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 12. background_run
 	bgRunTool, err := functiontool.New(functiontool.Config{
 		Name:        "background_run",
-		Description: "在后台子线程启动一条 Shell 命令执行。会立即返回任务 ID，大模型不需要在此等待。完成后结果将自动通过 drain_notifications 机制在下次交互时反馈给你。",
+		Description: "Start a shell command in a background thread. Returns a task ID immediately without waiting for completion. Results are automatically fed back via the drain_notifications mechanism during the next interaction.",
 	}, BackgroundRunHandler)
 	if err != nil {
 		return nil, err
@@ -233,7 +233,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 13. check_background
 	bgCheckTool, err := functiontool.New(functiontool.Config{
 		Name:        "check_background",
-		Description: "查询所有或特定后台任务的状态与缩略结果。若不传参数则列出全部后台任务的列表。",
+		Description: "Query the status and abbreviated results of all or a specific background task. If no arguments are provided, lists all background tasks.",
 	}, CheckBackgroundHandler)
 	if err != nil {
 		return nil, err
@@ -242,7 +242,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 14. schedule_create
 	schCreateTool, err := functiontool.New(functiontool.Config{
 		Name:        "schedule_create",
-		Description: "创建一个新的定时调度任务（支持单次或循环定时，支持持久化）。当时间到达时，其指定的提示指令会自动被反馈给大模型执行。",
+		Description: "Create a new scheduled task (supports one-shot or recurring, with optional persistence). When the scheduled time arrives, the specified prompt is automatically fed to the LLM for execution.",
 	}, ScheduleCreateHandler)
 	if err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 15. schedule_list
 	schListTool, err := functiontool.New(functiontool.Config{
 		Name:        "schedule_list",
-		Description: "列出当前所有活跃的定时调度任务（包含任务 ID、Cron 表达式、循环与持久化属性）。",
+		Description: "List all currently active scheduled tasks (includes task ID, cron expression, recurring and durable properties).",
 	}, ScheduleListHandler)
 	if err != nil {
 		return nil, err
@@ -260,7 +260,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// 16. schedule_delete
 	schDeleteTool, err := functiontool.New(functiontool.Config{
 		Name:        "schedule_delete",
-		Description: "根据任务 ID 删除一个现有的定时调度任务。",
+		Description: "Delete an existing scheduled task by its task ID.",
 	}, ScheduleDeleteHandler)
 	if err != nil {
 		return nil, err
@@ -269,7 +269,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s15 Team Tools
 	spawnTeammateTool, err := functiontool.New(functiontool.Config{
 		Name:        "spawn_teammate",
-		Description: "生成并在后台启动一个特工代理人角色。",
+		Description: "Spawn and start a teammate agent in the background.",
 	}, SpawnTeammateHandler)
 	if err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	listTeammatesTool, err := functiontool.New(functiontool.Config{
 		Name:        "list_teammates",
-		Description: "列出当前团队中所有特工代理人的状态与角色。",
+		Description: "List the status and roles of all teammate agents in the current team.",
 	}, ListTeammatesHandler)
 	if err != nil {
 		return nil, err
@@ -285,7 +285,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	sendMessageTool, err := functiontool.New(functiontool.Config{
 		Name:        "send_message",
-		Description: "向指定接收者的信箱发送一条消息。",
+		Description: "Send a message to a specific recipient's inbox.",
 	}, SendMessageHandler)
 	if err != nil {
 		return nil, err
@@ -293,7 +293,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	readInboxTool, err := functiontool.New(functiontool.Config{
 		Name:        "read_inbox",
-		Description: "读取并清空某个特工的信箱，以拉取新消息。",
+		Description: "Read and clear a teammate's inbox to pull new messages.",
 	}, ReadInboxHandler)
 	if err != nil {
 		return nil, err
@@ -301,7 +301,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	broadcastTool, err := functiontool.New(functiontool.Config{
 		Name:        "broadcast",
-		Description: "广播消息给所有的团队成员。",
+		Description: "Broadcast a message to all team members.",
 	}, BroadcastHandler)
 	if err != nil {
 		return nil, err
@@ -310,7 +310,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s16 Protocol Tools
 	protoShutdownReqTool, err := functiontool.New(functiontool.Config{
 		Name:        "protocol_shutdown_request",
-		Description: "发起一个正式的停机申请请求。",
+		Description: "Initiate a formal shutdown request.",
 	}, ProtocolShutdownRequestHandler)
 	if err != nil {
 		return nil, err
@@ -318,7 +318,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	protoShutdownRespTool, err := functiontool.New(functiontool.Config{
 		Name:        "protocol_shutdown_response",
-		Description: "对正式的停机申请请求做出回应批准或拒绝。",
+		Description: "Approve or reject a formal shutdown request.",
 	}, ProtocolShutdownResponseHandler)
 	if err != nil {
 		return nil, err
@@ -326,7 +326,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	protoPlanApprovalReqTool, err := functiontool.New(functiontool.Config{
 		Name:        "protocol_plan_approval_request",
-		Description: "发起一个重大的行动方案或重构计划审批请求。",
+		Description: "Submit a major action plan or refactoring proposal for approval.",
 	}, ProtocolPlanApprovalRequestHandler)
 	if err != nil {
 		return nil, err
@@ -334,7 +334,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	protoPlanApprovalRespTool, err := functiontool.New(functiontool.Config{
 		Name:        "protocol_plan_approval_response",
-		Description: "审批或拒绝其他的行动方案请求。",
+		Description: "Approve or reject an action plan proposal.",
 	}, ProtocolPlanApprovalResponseHandler)
 	if err != nil {
 		return nil, err
@@ -343,7 +343,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s17 Autonomous Agent Tools
 	agentClaimTaskTool, err := functiontool.New(functiontool.Config{
 		Name:        "agent_claim_task",
-		Description: "让某个特工代理人根据关键字过滤匹配并认领所有 pending 且 unblocked 的任务。",
+		Description: "Allow a teammate agent to claim all pending and unblocked tasks matching the given keywords.",
 	}, AgentClaimTaskHandler)
 	if err != nil {
 		return nil, err
@@ -351,7 +351,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	agentSetStateTool, err := functiontool.New(functiontool.Config{
 		Name:        "agent_set_state",
-		Description: "修改特工的状态，可选：WORK（专注工作模式）、IDLE（闲置轮询模式）。",
+		Description: "Set the agent's state. Options: WORK (focused work mode), IDLE (idle polling mode).",
 	}, AgentSetStateHandler)
 	if err != nil {
 		return nil, err
@@ -360,7 +360,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s18 Worktree Tools
 	wtCreateTool, err := functiontool.New(functiontool.Config{
 		Name:        "worktree_create",
-		Description: "创建一个隔离的 Git worktree 分支，用于专职且安全地开发某个特定任务。",
+		Description: "Create an isolated Git worktree branch for dedicated and safe development of a specific task.",
 	}, WorktreeCreateHandler)
 	if err != nil {
 		return nil, err
@@ -368,7 +368,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	wtListTool, err := functiontool.New(functiontool.Config{
 		Name:        "worktree_list",
-		Description: "列出当前所有的工作区隔离分支和目录。",
+		Description: "List all current workspace isolation branches and directories.",
 	}, WorktreeListHandler)
 	if err != nil {
 		return nil, err
@@ -376,7 +376,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	wtStatusTool, err := functiontool.New(functiontool.Config{
 		Name:        "worktree_status",
-		Description: "查询特定隔离工作区的具体状态详情。",
+		Description: "Query the detailed status of a specific isolated workspace.",
 	}, WorktreeStatusHandler)
 	if err != nil {
 		return nil, err
@@ -384,7 +384,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	wtEnterTool, err := functiontool.New(functiontool.Config{
 		Name:        "worktree_enter",
-		Description: "记录进入或激活某个隔离工作区的访问记录。",
+		Description: "Log entry into or activation of an isolated workspace.",
 	}, WorktreeEnterHandler)
 	if err != nil {
 		return nil, err
@@ -392,7 +392,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	wtCloseoutTool, err := functiontool.New(functiontool.Config{
 		Name:        "worktree_closeout",
-		Description: "收尾某个特定的隔离工作区分支，可以选择保留路径(keep)或强力移除(remove)。",
+		Description: "Close out a specific isolated workspace branch. Choose to keep the path (keep) or forcefully remove it (remove).",
 	}, WorktreeCloseoutHandler)
 	if err != nil {
 		return nil, err
@@ -401,7 +401,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s19 MCP Tool
 	mcpServerListTool, err := functiontool.New(functiontool.Config{
 		Name:        "mcp_server_list",
-		Description: "列出当前全部已连接 of 外部 MCP 插件服务器及其连接状态。",
+		Description: "List all currently connected external MCP plugin servers and their connection status.",
 	}, MCPServerListHandler)
 	if err != nil {
 		return nil, err
@@ -410,7 +410,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s20 CI Watcher Tool
 	ciWatchTool, err := functiontool.New(functiontool.Config{
 		Name:        "agent_watch_ci",
-		Description: "启动后台进程监听 GitHub Actions CI 状态，报错时发送收件箱通知。",
+		Description: "Start a background process to monitor GitHub Actions CI status and send inbox notifications on failures.",
 	}, AgentWatchCIHandler)
 	if err != nil {
 		return nil, err
@@ -419,7 +419,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	// s21 LSP Tools
 	lspGotoDefinitionTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_goto_definition",
-		Description: "通过 LSP/gopls 在当前 Go 工作区定位特定行和列位置的符号声明及定义，并返回所定义的文件路径、行号与代码片段预览。",
+		Description: "Locate the declaration and definition of a symbol at a specific line and column position in the current Go workspace via LSP/gopls. Returns the defining file path, line number, and code snippet preview.",
 	}, LSPGotoDefinitionHandler)
 	if err != nil {
 		return nil, err
@@ -427,7 +427,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	lspFindReferencesTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_find_references",
-		Description: "通过 LSP/gopls 在当前 Go 工作区全局查找特定位置符号的所有引用和使用位置列表。",
+		Description: "Find all references and usages of a symbol at a specific position across the current Go workspace via LSP/gopls.",
 	}, LSPFindReferencesHandler)
 	if err != nil {
 		return nil, err
@@ -435,7 +435,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	lspDocumentSymbolsTool, err := functiontool.New(functiontool.Config{
 		Name:        "lsp_document_symbols",
-		Description: "通过 LSP/gopls 提取并解析指定 Go 文件中的所有类、结构体、方法、函数、变量等语义符号列表。",
+		Description: "Extract and list all semantic symbols (classes, structs, methods, functions, variables, etc.) from a specified Go file via LSP/gopls.",
 	}, LSPDocumentSymbolsHandler)
 	if err != nil {
 		return nil, err
