@@ -145,6 +145,14 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	editBatchTool, err := functiontool.New(functiontool.Config{
+		Name:        "file_edit_batch",
+		Description: "Apply multiple file edits atomically. All edits succeed or none are applied. Use this when making coordinated changes across multiple locations in one or more files.",
+	}, FileEditBatchHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	grepTool, err := functiontool.New(functiontool.Config{
 		Name:        "search_grep",
 		Description: "Perform a global regex text search across the current directory, similar to grep/ripgrep.",
@@ -489,7 +497,7 @@ func GetSWETools() ([]tool.Tool, error) {
 	}
 
 	resTools := []tool.Tool{
-		readTool, writeTool, editTool, listDirTool, grepTool, findTool, shellTool, todoTool,
+		readTool, writeTool, editTool, editBatchTool, listDirTool, grepTool, findTool, shellTool, todoTool,
 		memorySaveTool, memoryListTool,
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,

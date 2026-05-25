@@ -237,14 +237,39 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 		return "deny", reason
 	}
 
-	if pm.mode == ModeAuto && !isWrite {
-		pm.consecutiveDenials = 0
-		reason := "Auto mode: non-write operations auto-approved"
-		LogAudit(CatSecurity, "mode_auto_allow", reason, map[string]any{
-			"tool": toolName,
-			"args": args,
-		})
-		return "allow", reason
+	// Phase 2: Auto mode uses 4-tier risk classifier
+	if pm.mode == ModeAuto {
+		tier, tierReason := ClassifyTool(toolName, args)
+		switch tier {
+		case TierTrusted, TierLowRisk:
+			// Auto-approve trusted and low-risk operations
+			pm.consecutiveDenials = 0
+			reason := fmt.Sprintf("Auto mode: %s (%s)", tierReason, tier)
+			LogAudit(CatSecurity, "mode_auto_allow", reason, map[string]any{
+				"tool": toolName,
+				"tier": tier.String(),
+				"args": args,
+			})
+			return "allow", reason
+		case TierMediumRisk, TierHighRisk:
+			// Medium and high risk: ask human (LLM review can be added later for medium)
+			reason := fmt.Sprintf("Auto mode: %s (%s), requires human confirmation", tierReason, tier)
+			LogAudit(CatSecurity, "mode_auto_escalate", reason, map[string]any{
+				"tool": toolName,
+				"tier": tier.String(),
+				"args": args,
+			})
+			return "ask", reason
+		default:
+			// Fail-safe: unknown tier treated as high risk
+			reason := fmt.Sprintf("Auto mode: unknown risk tier for %q, requires human confirmation", toolName)
+			LogAudit(CatSecurity, "mode_auto_escalate", reason, map[string]any{
+				"tool": toolName,
+				"tier": "unknown",
+				"args": args,
+			})
+			return "ask", reason
+		}
 	}
 
 	// Step 3: Allow rules
