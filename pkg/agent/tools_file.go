@@ -147,6 +147,7 @@ func FileEditHandler(ctx tool.Context, args FileEditArgs) (FileEditResult, error
 		}, nil
 	}
 
+	snapshotFile(resolved)
 	err = os.WriteFile(resolved, []byte(newContent), 0644)
 	if err != nil {
 		return FileEditResult{Success: false}, WrapToolError("file_edit", args, fmt.Errorf("failed to write file: %w", err))
@@ -402,6 +403,7 @@ func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, er
 		}
 	}
 
+	snapshotFile(resolved)
 	err := os.WriteFile(resolved, []byte(args.Content), 0644)
 	if err != nil {
 		return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("failed to write file: %w", err))
@@ -649,6 +651,21 @@ func sortFiles(files []string) {
 	}
 }
 
+// snapshotFile saves the original content of a file for rollback support.
+func snapshotFile(absPath string) {
+	pendingEditSnapshots.mu.Lock()
+	defer pendingEditSnapshots.mu.Unlock()
+	if _, exists := pendingEditSnapshots.snapshots[absPath]; exists {
+		return
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		pendingEditSnapshots.snapshots[absPath] = ""
+		return
+	}
+	pendingEditSnapshots.snapshots[absPath] = string(data)
+}
+
 // 6. file_edit_batch (atomic multi-edit with rollback)
 type FileEditBatchArgs struct {
 	Edits []FileEditArgs `json:"edits" description:"List of edits to apply atomically"`
@@ -744,7 +761,7 @@ func FileEditBatchHandler(ctx tool.Context, args FileEditBatchArgs) (FileEditBat
 	// Phase 2: Snapshot all files and apply all edits
 	diffs := make([]string, 0, len(plans))
 	for i, plan := range plans {
-		snapshotFileBeforeEdit(plan.resolvedPath)
+		snapshotFile(plan.resolvedPath)
 		if err := os.WriteFile(plan.resolvedPath, []byte(plan.newContent), 0644); err != nil {
 			// Rollback everything applied so far
 			rollbackPendingEdits()

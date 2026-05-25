@@ -177,6 +177,21 @@ func ClassifyTool(toolName string, args any) (RiskTier, string) {
 	case "file_read", "list_directory", "search_grep", "find_files":
 		return TierTrusted, "read-only tool, auto-approved"
 
+	case "todo", "task_create", "task_update", "task_list", "task_get",
+		"check_background", "schedule_create", "schedule_list", "schedule_delete",
+		// Teams
+		"spawn_teammate", "list_teammates", "send_message", "read_inbox", "broadcast",
+		// Protocols
+		"protocol_shutdown_request", "protocol_shutdown_response",
+		"protocol_plan_approval_request", "protocol_plan_approval_response",
+		// Autonomy
+		"agent_claim_task", "agent_set_state",
+		// Worktrees
+		"worktree_create", "worktree_list", "worktree_status", "worktree_enter", "worktree_closeout",
+		// MCP
+		"mcp_server_list":
+		return TierTrusted, fmt.Sprintf("tool %q auto-approved", toolName)
+
 	case "file_write", "file_edit":
 		// File writes are low risk (path-based heuristics still apply via ReviewFileOperation)
 		return TierLowRisk, fmt.Sprintf("file write tool %s, auto-approved with logging", toolName)

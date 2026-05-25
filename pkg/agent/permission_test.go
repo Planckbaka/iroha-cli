@@ -87,26 +87,44 @@ func TestPermissionManagerModes(t *testing.T) {
 		}
 	})
 
-	// 3. Auto Mode Tests
+	// 3. Auto Mode Tests (Phase 2: uses 4-tier risk classifier)
 	t.Run("Auto Mode Permissions", func(t *testing.T) {
 		pm := NewPermissionManager(ModeAuto)
 
-		// File read is a read tool -> auto-approved in Auto mode
+		// TierTrusted: File read is a read-only tool -> auto-approved
 		decision, reason := pm.Check("file_read", FileReadArgs{Path: "main.go"})
 		if decision != "allow" {
 			t.Errorf("Expected 'allow' for file_read in Auto mode, got %q (reason: %q)", decision, reason)
 		}
 
-		// Todo is a read tool -> auto-approved in Auto mode
+		// TierTrusted: Todo is a known safe tool -> auto-approved
 		decision, reason = pm.Check("todo", nil)
 		if decision != "allow" {
 			t.Errorf("Expected 'allow' for todo in Auto mode, got %q (reason: %q)", decision, reason)
 		}
 
-		// File write is a write tool -> not auto-approved, no matching rules -> should ask
+		// TierLowRisk: File write is low-risk -> auto-approved with logging
 		decision, reason = pm.Check("file_write", FileWriteArgs{Path: "out.go", Content: "test"})
+		if decision != "allow" {
+			t.Errorf("Expected 'allow' for file_write in Auto mode (low_risk tier), got %q (reason: %q)", decision, reason)
+		}
+
+		// TierTrusted: shell_run with trusted command (ls) -> auto-approved
+		decision, reason = pm.Check("shell_run", ShellRunArgs{Command: "ls -la"})
+		if decision != "allow" {
+			t.Errorf("Expected 'allow' for ls in Auto mode, got %q (reason: %q)", decision, reason)
+		}
+
+		// TierHighRisk: shell_run with dangerous command (rm) -> deny (caught by security validator)
+		decision, reason = pm.Check("shell_run", ShellRunArgs{Command: "rm -rf /"})
+		if decision != "deny" {
+			t.Errorf("Expected 'deny' for rm -rf / in Auto mode, got %q (reason: %q)", decision, reason)
+		}
+
+		// TierHighRisk: unknown tool -> ask human
+		decision, reason = pm.Check("unknown_tool", nil)
 		if decision != "ask" {
-			t.Errorf("Expected 'ask' for file_write in Auto mode, got %q (reason: %q)", decision, reason)
+			t.Errorf("Expected 'ask' for unknown tool in Auto mode, got %q (reason: %q)", decision, reason)
 		}
 	})
 }

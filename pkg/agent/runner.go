@@ -1002,25 +1002,6 @@ func init() {
 	pendingEditSnapshots.snapshots = make(map[string]string)
 }
 
-// snapshotFileBeforeEdit saves the original content of a file if not already snapshotted.
-// Returns true if a new snapshot was created, false if one already existed.
-func snapshotFileBeforeEdit(absPath string) bool {
-	pendingEditSnapshots.mu.Lock()
-	defer pendingEditSnapshots.mu.Unlock()
-
-	if _, exists := pendingEditSnapshots.snapshots[absPath]; exists {
-		return false
-	}
-
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		// File doesn't exist yet (new file), snapshot empty string
-		pendingEditSnapshots.snapshots[absPath] = ""
-		return true
-	}
-	pendingEditSnapshots.snapshots[absPath] = string(data)
-	return true
-}
 
 // rollbackPendingEdits restores all files to their pre-edit state and clears snapshots.
 func rollbackPendingEdits() {
