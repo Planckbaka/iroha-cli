@@ -200,6 +200,15 @@ func (mm *MemoryManager) Save(name, description string, memType MemoryType, cont
 		return err
 	}
 
+	// Check entry cap for new entries (updates don't count)
+	mm.mu.RLock()
+	_, exists := mm.entries[name]
+	currentCount := len(mm.entries)
+	mm.mu.RUnlock()
+	if !exists && currentCount >= MaxMemoryEntries {
+		return fmt.Errorf("memory store full: max %d entries reached", MaxMemoryEntries)
+	}
+
 	// Determine save directory: prefer project-level
 	saveDir, err := projectMemoryDir()
 	if err != nil {
@@ -514,17 +523,18 @@ func (mm *MemoryManager) Update(name, description string, memType MemoryType, co
 		LogError(CatSession, "memory_update_not_found", "Attempted to update non-existent memory", err, map[string]any{"name": name})
 		return err
 	}
-	mm.mu.Unlock()
-
-	// Determine which directory the file lives in.
-	saveDir := ""
-	for _, dir := range mm.dirs {
-		testPath := filepath.Join(dir, existing.File)
-		if _, err := os.Stat(testPath); err == nil {
-			saveDir = dir
+	fileSnapshot := existing.File
+	// Find which directory the file is in
+	var saveDir string
+	for _, d := range mm.dirs {
+		candidate := filepath.Join(d, fileSnapshot)
+		if _, err := os.Stat(candidate); err == nil {
+			saveDir = d
 			break
 		}
 	}
+	mm.mu.Unlock()
+
 	if saveDir == "" {
 		// Fallback: use project memory dir.
 		var err error

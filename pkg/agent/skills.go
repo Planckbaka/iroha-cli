@@ -215,7 +215,21 @@ func LoadInstructions(skill *SkillManifest) (string, error) {
 		return "", fmt.Errorf("skill %s has no base directory", skill.ID)
 	}
 	path := filepath.Join(skill.BaseDir, skill.InstructionsFile)
-	data, err := os.ReadFile(path)
+
+	// Canonicalize and verify path stays within BaseDir
+	absBase, err := filepath.Abs(skill.BaseDir)
+	if err != nil {
+		return "", fmt.Errorf("skill %s: invalid base directory: %w", skill.ID, err)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("skill %s: invalid instructions path: %w", skill.ID, err)
+	}
+	if !strings.HasPrefix(absPath, absBase+string(os.PathSeparator)) && absPath != absBase {
+		return "", fmt.Errorf("skill %s: instructions path escapes base directory", skill.ID)
+	}
+
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read skill instructions %s: %w", path, err)
 	}

@@ -111,9 +111,44 @@ func checkSSRF(u *url.URL) error {
 	return nil
 }
 
+// ssrfSafeTransport validates resolved IPs at connection time to prevent DNS rebinding.
+var ssrfSafeTransport = &http.Transport{
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address: %w", err)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
+		}
+		for _, ip := range ips {
+			if isPrivateIP(ip.IP) {
+				return nil, fmt.Errorf("SSRF blocked: %s resolves to private IP %s", host, ip.IP)
+			}
+		}
+		d := net.Dialer{Timeout: 10 * time.Second}
+		return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	},
+}
+
+var ssrfSafeClient = &http.Client{
+	Transport: ssrfSafeTransport,
+	Timeout:   30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		// Redirect URLs are validated by the transport's DialContext
+		return nil
+	},
+}
+
 // ---------------------------------------------------------------------------
 // HTML → text conversion
 // ---------------------------------------------------------------------------
+
+var multiNewlineRe = regexp.MustCompile(`\n{3,}`)
 
 func htmlToText(r io.Reader) string {
 	doc, err := html.Parse(r)
@@ -154,8 +189,7 @@ func htmlToText(r io.Reader) string {
 
 	// Collapse multiple blank lines
 	text := b.String()
-	re := regexp.MustCompile(`\n{3,}`)
-	text = re.ReplaceAllString(text, "\n\n")
+	text = multiNewlineRe.ReplaceAllString(text, "\n\n")
 	return strings.TrimSpace(text)
 }
 
@@ -214,7 +248,7 @@ func WebFetchHandler(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error
 	}
 	req.Header.Set("User-Agent", "iroha-code/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return WebFetchResult{}, WrapToolError("web_fetch", args, fmt.Errorf("HTTP request failed: %w", err))
 	}
@@ -312,7 +346,7 @@ func duckduckgoSearch(query string, count int) (WebSearchResult, error) {
 	}
 	req.Header.Set("User-Agent", "iroha-code/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return WebSearchResult{}, WrapToolError("web_search", WebSearchArgs{Query: query}, fmt.Errorf("DuckDuckGo request failed: %w", err))
 	}
@@ -424,7 +458,7 @@ func searxngSearch(searxngURL, query string, count int) (WebSearchResult, error)
 	}
 	req.Header.Set("User-Agent", "iroha-code/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return WebSearchResult{}, WrapToolError("web_search", WebSearchArgs{Query: query}, fmt.Errorf("SearXNG request failed: %w", err))
 	}

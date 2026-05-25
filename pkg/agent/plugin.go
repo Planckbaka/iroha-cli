@@ -25,6 +25,9 @@ type PluginManifest struct {
 // semverRe matches basic semver patterns like 1.0.0, 1.0.0-alpha, 1.0.0+build.
 var semverRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$`)
 
+// pluginIDRe validates plugin IDs: alphanumeric with hyphens/underscores, max 64 chars.
+var pluginIDRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
 // PluginManager discovers, loads, and validates plugin manifests.
 type PluginManager struct {
 	mu      sync.RWMutex
@@ -58,6 +61,12 @@ func LoadPluginManifest(path string) (*PluginManifest, error) {
 func ValidateManifest(m *PluginManifest) error {
 	if strings.TrimSpace(m.ID) == "" {
 		return fmt.Errorf("plugin manifest missing required field: id")
+	}
+	if !pluginIDRe.MatchString(m.ID) {
+		return fmt.Errorf("plugin ID %q must be alphanumeric with hyphens/underscores, max 64 chars", m.ID)
+	}
+	if strings.Contains(m.ID, "__") {
+		return fmt.Errorf("plugin ID %q must not contain double underscores", m.ID)
 	}
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("plugin manifest missing required field: name")
