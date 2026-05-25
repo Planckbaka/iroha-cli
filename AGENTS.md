@@ -39,7 +39,7 @@ An interactive AI Agent CLI built in Go, powered by 7 LLM providers (GLM, OpenAI
 - Unit tests live alongside source files (`*_test.go`)
 - Run `go test ./pkg/...` for all package tests
 - Test coverage: ~25% (3,633 test lines / ~16,000 source lines)
-- Key gaps: `runner.go` has no dedicated tests, `glm_test.go` is empty
+- Key gaps: `tools.go` / `tools_*.go` have no dedicated tests
 
 ### Common Patterns
 - Standard Go project layout: `cmd/` for binaries, `pkg/` for libraries

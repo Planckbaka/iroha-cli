@@ -141,8 +141,14 @@ func (tb *ToolStatusBridge) drain() {
 
 // CustomRunner wraps ADK runner and manages background execution
 type CustomRunner struct {
-	adkRunner *runner.Runner
-	llmModel  model.LLM
+	adkRunner       *runner.Runner
+	llmModel        model.LLM
+	Provider        llm.ProviderType
+	ActiveModelName string
+	APIKey          string
+	BaseURL         string
+	APIFormat       llm.APIFormat
+	GenkitRegistry  *genkit.Genkit
 }
 
 func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
@@ -238,9 +244,30 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	// Start background CronScheduler
 	GlobalCronScheduler.Start()
 
+	// Initialize GlobalAgentPool active parameters
+	GlobalAgentPool.mu.Lock()
+	GlobalAgentPool.Provider = provider
+	GlobalAgentPool.ModelName = modelName
+	GlobalAgentPool.APIKey = apiKey
+	GlobalAgentPool.BaseURL = baseURL
+	GlobalAgentPool.APIFormat = apiFormat
+	GlobalAgentPool.GenkitRegistry = g
+	GlobalAgentPool.mu.Unlock()
+
+	// Override team ProcessMessage callback to use our agent pool
+	GlobalTeamManager.ProcessMessage = func(teammate *Teammate, msg TeamMessage) (string, error) {
+		return GlobalAgentPool.ExecuteMessage(teammate, msg)
+	}
+
 	return &CustomRunner{
-		adkRunner: adkRunner,
-		llmModel:  modelAdapter,
+		adkRunner:       adkRunner,
+		llmModel:        modelAdapter,
+		Provider:        provider,
+		ActiveModelName: modelName,
+		APIKey:          apiKey,
+		BaseURL:         baseURL,
+		APIFormat:       apiFormat,
+		GenkitRegistry:  g,
 	}, nil
 }
 
@@ -457,6 +484,17 @@ func (b *blockingConfirmationTool) ProcessRequest(ctx tool.Context, req *model.L
 }
 
 func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]any, error) {
+	agentName := ""
+	if ctx != nil {
+		if val := ctx.Value(AgentNameKey); val != nil {
+			agentName, _ = val.(string)
+		}
+	}
+	prefix := ""
+	if agentName != "" {
+		prefix = fmt.Sprintf("[%s] ", agentName)
+	}
+
 	// Step 1: Check permissions with the GlobalPermissionManager
 	decision, reason := GlobalPermissionManager.Check(b.Name(), args)
 	LogAudit(CatToolCall, "permission_check", fmt.Sprintf("Tool %s: decision=%s reason=%s", b.Name(), decision, reason), map[string]any{
@@ -529,7 +567,7 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		if m, ok := args.(map[string]any); ok {
 			cmdStr = fmt.Sprintf("%v", m["command"])
 		}
-		promptMsg = fmt.Sprintf("\x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   原因: %s%s", cmdStr, reason, autoReviewNote)
+		promptMsg = fmt.Sprintf("%s\x1b[1;33m[shell_run]\x1b[0m 正在尝试运行命令: \x1b[32m$ %s\x1b[0m\n   原因: %s%s", prefix, cmdStr, reason, autoReviewNote)
 	} else if b.Name() == "file_write" {
 		pathStr := ""
 		contentStr := ""
@@ -547,26 +585,26 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		}
 
 		if diffStr != "" {
-			promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n%s", pathStr, reason, diffStr)
+			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s\n\n\x1b[1;34m[文件变更差异 (Diff)]:\x1b[0m\n%s", prefix, pathStr, reason, diffStr)
 		} else {
-			promptMsg = fmt.Sprintf("\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
+			promptMsg = fmt.Sprintf("%s\x1b[1;36m[file_write]\x1b[0m 正在尝试写入文件: \x1b[32m%s\x1b[0m\n   原因: %s", prefix, pathStr, reason)
 		}
 	} else if b.Name() == "file_read" {
 		pathStr := ""
 		if m, ok := args.(map[string]any); ok {
 			pathStr = fmt.Sprintf("%v", m["path"])
 		}
-		promptMsg = fmt.Sprintf("\x1b[1;34m[file_read]\x1b[0m 正在尝试读取文件: \x1b[32m%s\x1b[0m\n   原因: %s", pathStr, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;34m[file_read]\x1b[0m 正在尝试读取文件: \x1b[32m%s\x1b[0m\n   原因: %s", prefix, pathStr, reason)
 	} else if b.Name() == "search_grep" {
 		patternStr := ""
 		if m, ok := args.(map[string]any); ok {
 			patternStr = fmt.Sprintf("%v", m["pattern"])
 		}
-		promptMsg = fmt.Sprintf("\x1b[1;35m[search_grep]\x1b[0m 正在尝试全局搜索模式: \x1b[32m\"%s\"\x1b[0m\n   原因: %s", patternStr, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;35m[search_grep]\x1b[0m 正在尝试全局搜索模式: \x1b[32m\"%s\"\x1b[0m\n   原因: %s", prefix, patternStr, reason)
 	} else if b.Name() == "todo" {
-		promptMsg = fmt.Sprintf("\x1b[1;32m[todo]\x1b[0m 正在尝试更新任务规划进度表\n   原因: %s", reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;32m[todo]\x1b[0m 正在尝试更新任务规划进度表\n   原因: %s", prefix, reason)
 	} else {
-		promptMsg = fmt.Sprintf("\x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   原因: %s", b.Name(), args, reason)
+		promptMsg = fmt.Sprintf("%s\x1b[1;35m[%s]\x1b[0m 正在尝试执行操作: %v\n   原因: %s", prefix, b.Name(), args, reason)
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())

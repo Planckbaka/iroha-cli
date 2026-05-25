@@ -23,10 +23,11 @@ type FileReadResult struct {
 const maxFileReadSize = 10 * 1024 * 1024 // 10MB
 
 func FileReadHandler(ctx tool.Context, args FileReadArgs) (FileReadResult, error) {
-	if err := validateSandboxPath(args.Path); err != nil {
+	resolved := resolvePath(ctx, args.Path)
+	if err := validateSandboxPath(ctx, resolved); err != nil {
 		return FileReadResult{}, err
 	}
-	info, err := os.Stat(args.Path)
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
 	}
@@ -37,7 +38,7 @@ func FileReadHandler(ctx tool.Context, args FileReadArgs) (FileReadResult, error
 		return FileReadResult{}, fmt.Errorf("文件 '%s' 大小为 %d 字节，超过 10MB 读取限制。请使用 shell_run 配合 head/tail 来分段读取", args.Path, info.Size())
 	}
 
-	data, err := os.ReadFile(args.Path)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return FileReadResult{}, WrapToolError("file_read", args, fmt.Errorf("读取文件失败: %w", err))
 	}
@@ -55,18 +56,19 @@ type FileWriteResult struct {
 }
 
 func FileWriteHandler(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
-	if err := validateSandboxPath(args.Path); err != nil {
+	resolved := resolvePath(ctx, args.Path)
+	if err := validateSandboxPath(ctx, resolved); err != nil {
 		return FileWriteResult{Success: false}, err
 	}
 	// Create parent directories if they don't exist
-	dir := filepath.Dir(args.Path)
+	dir := filepath.Dir(resolved)
 	if dir != "." && dir != "/" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("创建父目录失败: %w", err))
 		}
 	}
 
-	err := os.WriteFile(args.Path, []byte(args.Content), 0644)
+	err := os.WriteFile(resolved, []byte(args.Content), 0644)
 	if err != nil {
 		return FileWriteResult{Success: false}, WrapToolError("file_write", args, fmt.Errorf("写入文件失败: %w", err))
 	}
@@ -87,7 +89,8 @@ func ListDirHandler(ctx tool.Context, args ListDirArgs) (ListDirResult, error) {
 	if args.Path == "" {
 		args.Path = "."
 	}
-	if err := validateSandboxPath(args.Path); err != nil {
+	resolved := resolvePath(ctx, args.Path)
+	if err := validateSandboxPath(ctx, resolved); err != nil {
 		return ListDirResult{}, err
 	}
 	if args.MaxDepth <= 0 {
@@ -97,12 +100,7 @@ func ListDirHandler(ctx tool.Context, args ListDirArgs) (ListDirResult, error) {
 		args.MaxDepth = 4
 	}
 
-	cwd, _ := os.Getwd()
-	root := args.Path
-	if !filepath.IsAbs(root) {
-		root = filepath.Join(cwd, root)
-	}
-
+	root := resolved
 	var entries []string
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -174,7 +172,7 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 	}
 
 	var matches []string
-	cwd, _ := os.Getwd()
+	cwd := getWorkdir(ctx)
 
 	err = filepath.Walk(cwd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

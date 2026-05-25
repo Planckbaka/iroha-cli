@@ -10,6 +10,8 @@ Terminal UI built with Bubble Tea: prompt input, streaming output rendering, hum
 | File | Description |
 |------|-------------|
 | `model.go` | `Model` — Bubble Tea model with 6 states (prompt/thinking/streaming/confirming/permission_select/session_select), 17 slash commands, async agent event routing, turn finalization |
+| `update_keys.go` | Keyboard handler (`Update` for `tea.KeyMsg`) — input, slash commands, Ctrl+C/S/D, PgUp/PgDn scrolling, resize |
+| `update_msgs.go` | Message handler (`handleCustomMsg`) — processes agent events (`StreamTextMsg`, `ConfirmationRequiredMsg`, `ToolStatusMsg`, `AgentErrorMsg`, `AgentDoneMsg`), spinner updates |
 | `view.go` | `RenderMarkdown`, `RenderConfirmCard`, `RenderWelcomeCard`, `RenderErrorCard`, `RenderTodoDashboard`, `RenderTaskDashboard`, `RenderTaskDetails`, `RenderTeamDashboard`, `RenderWorktreeDashboard`, `RenderMCPDashboard` — view rendering functions |
 | `styles.go` | Lipgloss color palette (cyber-holographic: electric cyan + neon pink) and style definitions |
 | `input.go` | `HistoryManager` (Up/Down arrow navigation), `SetupTextInput` — prompt input initialization |

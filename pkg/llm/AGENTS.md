@@ -29,8 +29,7 @@ LLM provider abstraction layer. Implements the `model.LLM` interface from Google
 
 ### Testing Requirements
 - `go test ./pkg/llm/...`
-- Tests exist for: anthropic adapter (271 lines, httptest SSE mock)
-- **Gap**: `glm_test.go` is empty — OpenAI adapter has no test coverage
+- Tests exist for: anthropic adapter (271 lines, httptest SSE mock), openai adapter (SSE streaming, tool call accumulation, retry logic)
 - **Gap**: No tests for Genkit adapter
 
 ### Common Patterns

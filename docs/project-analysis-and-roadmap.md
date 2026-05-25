@@ -198,6 +198,10 @@ main.go (cmd/agent-cli/main.go)
   - [x] **AST 级 Shell 防御**：词法分词器打散审查与 CWD 绝对防线注入（已落地）。
   - [x] **Linter 大捷**：`golangci-lint` 零报错通过（已落地）。
   - [x] **工具单体解耦**：将巨型 tools.go 拆分为 9 个按领域划分的高内聚文件（已落地）。
+  - [x] **交互单体解耦**：将巨型 model.go 拆分为 update_keys.go 和 update_msgs.go（已落地）。
+  - [x] **多层规范链 (AGENTS.md & CLAUDE.md)**：支持从 CWD 向上遍历到项目根目录的 AGENTS.md 与多层 CLAUDE.md 自动级联加载（已落地）。
+  - [x] **文件夹技能 (SKILL.md)**：支持目录式自定义技能的 SKILL.md 文档自动解构载入（已落地）。
+  - [x] **MCP-Skill 融合 (plugins.json)**：支持技能文件夹级 plugins.json 自动启动并注册技能专属的 MCP 插件工具（已落地）。
 
 ---
 
@@ -207,7 +211,7 @@ main.go (cmd/agent-cli/main.go)
 | 优先级 | 任务 | 预估工时 | 关键文件 |
 |--------|------|-----------|---------|
 | **[已实现 P1]** | **拆分 tools.go** | **2 天** | `tools.go` 拆分为 9 个按领域高内聚文件（如 `tools_file.go` 等） |
-| P1 | 拆分 model.go | 2 天 | `model.go` → `tui/handlers/` 动作抽取 |
+| **[已实现 P1]** | **拆分 model.go** | **2 天** | `model.go` 拆分为 `update_keys.go` 和 `update_msgs.go` 动作抽取 |
 | P0 | 补充 OpenAI Compatible 测试 | 2 天 | `pkg/llm/openai_test.go` |
 | P0 | 补充 ADK Session 模拟测试 | 2 天 | `pkg/agent/runner_test.go` |
 

@@ -27,7 +27,7 @@ const shellRunTimeout = 30 * time.Second
 const maxStreamLines = 500
 
 func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error) {
-	if err := checkShellCommandSandbox(args.Command); err != nil {
+	if err := checkShellCommandSandbox(ctx, args.Command); err != nil {
 		return ShellRunResult{}, err
 	}
 
@@ -35,6 +35,7 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, "sh", "-c", args.Command)
+	cmd.Dir = getWorkdir(ctx)
 
 	var outBuf bytes.Buffer
 	pr, pw := io.Pipe()
@@ -109,7 +110,7 @@ type BackgroundRunResult struct {
 }
 
 func BackgroundRunHandler(ctx tool.Context, args BackgroundRunArgs) (BackgroundRunResult, error) {
-	if err := checkShellCommandSandbox(args.Command); err != nil {
+	if err := checkShellCommandSandbox(ctx, args.Command); err != nil {
 		return BackgroundRunResult{}, err
 	}
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -37,12 +38,29 @@ func WrapToolError(toolName string, args any, err error) error {
 	return err
 }
 
-// validateSandboxPath checks if the resolved absolute path resides under the current working directory.
-func validateSandboxPath(rawPath string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("无法获取当前工作目录: %w", err)
+func getWorkdir(ctx context.Context) string {
+	if ctx != nil {
+		if val := ctx.Value(WorkdirKey); val != nil {
+			if s, ok := val.(string); ok && s != "" {
+				return s
+			}
+		}
 	}
+	cwd, _ := os.Getwd()
+	return cwd
+}
+
+func resolvePath(ctx context.Context, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	workdir := getWorkdir(ctx)
+	return filepath.Join(workdir, path)
+}
+
+// validateSandboxPath checks if the resolved absolute path resides under the current working directory.
+func validateSandboxPath(ctx context.Context, rawPath string) error {
+	cwd := getWorkdir(ctx)
 
 	absPath, err := filepath.Abs(rawPath)
 	if err != nil {
@@ -59,11 +77,8 @@ func validateSandboxPath(rawPath string) error {
 }
 
 // checkShellCommandSandbox scans a shell command for relative path escaping or out-of-bounds absolute path accesses.
-func checkShellCommandSandbox(command string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil
-	}
+func checkShellCommandSandbox(ctx context.Context, command string) error {
+	cwd := getWorkdir(ctx)
 	cleanCWD := filepath.Clean(cwd)
 
 	words := strings.Fields(command)
@@ -401,6 +416,31 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	// s21 LSP Tools
+	lspGotoDefinitionTool, err := functiontool.New(functiontool.Config{
+		Name:        "lsp_goto_definition",
+		Description: "通过 LSP/gopls 在当前 Go 工作区定位特定行和列位置的符号声明及定义，并返回所定义的文件路径、行号与代码片段预览。",
+	}, LSPGotoDefinitionHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	lspFindReferencesTool, err := functiontool.New(functiontool.Config{
+		Name:        "lsp_find_references",
+		Description: "通过 LSP/gopls 在当前 Go 工作区全局查找特定位置符号的所有引用和使用位置列表。",
+	}, LSPFindReferencesHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	lspDocumentSymbolsTool, err := functiontool.New(functiontool.Config{
+		Name:        "lsp_document_symbols",
+		Description: "通过 LSP/gopls 提取并解析指定 Go 文件中的所有类、结构体、方法、函数、变量等语义符号列表。",
+	}, LSPDocumentSymbolsHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	resTools := []tool.Tool{
 		readTool, writeTool, listDirTool, grepTool, shellTool, todoTool,
 		memorySaveTool, memoryListTool,
@@ -420,6 +460,8 @@ func GetSWETools() ([]tool.Tool, error) {
 		mcpServerListTool,
 		// s20
 		ciWatchTool,
+		// s21
+		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool,
 	}
 
 	// s19 Dynamic MCP Tools
