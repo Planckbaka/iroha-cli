@@ -12,6 +12,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -91,15 +92,23 @@ func TypePromptPrefix(typeName string) string {
 }
 
 func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string, error) {
+	// Determine worktree directory
+	worktreePath := filepath.Join(GlobalWorktreeManager.worktreesDir, teammate.Name)
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		worktreePath, _ = os.Getwd()
+	}
+	return ap.ExecuteMessageInDir(teammate, msg, worktreePath)
+}
+
+func (ap *AgentPool) ExecuteMessageInDir(teammate *Teammate, msg TeamMessage, dir string) (string, error) {
 	ap.mu.Lock()
 	subRunner, exists := ap.runners[teammate.Name]
 	ap.mu.Unlock()
 
 	if !exists {
-		// 1. Ensure worktree directory exists dynamically if it doesn't yet
-		worktreePath := filepath.Join(GlobalWorktreeManager.worktreesDir, teammate.Name)
-		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-			_, _ = GlobalWorktreeManager.Create(teammate.Name, "")
+		// 1. Ensure directory exists dynamically if it doesn't yet
+		if dir != "" {
+			_ = os.MkdirAll(dir, 0755)
 		}
 
 		// 2. Setup subagent ADK Runner
@@ -127,8 +136,14 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		genkitReg := ap.GenkitRegistry
 		ap.mu.RUnlock()
 
-		// Retrieve or build subagent adapter
-		subAdapter, err := llm.NewAdapter(genkitReg, prov, mod, key, base, systemPrompt, fmtFormat, runnerHooks{})
+		// Retrieve or build subagent adapter with dynamic resolve hooks
+		var subAdapter model.LLM
+		hooks := runnerHooks{
+			modelGetter: func() model.LLM {
+				return subAdapter
+			},
+		}
+		subAdapter, err = llm.NewAdapter(genkitReg, prov, mod, key, base, systemPrompt, fmtFormat, hooks)
 		if err != nil {
 			return "", err
 		}
@@ -159,16 +174,11 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		ap.mu.Unlock()
 	}
 
-	// Determine worktree directory
-	worktreePath := filepath.Join(GlobalWorktreeManager.worktreesDir, teammate.Name)
-	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-		worktreePath, _ = os.Getwd()
-	}
-
 	// 3. Execute prompt on the subRunner
 	// Setup context with subagent name and workdir path
-	ctx := context.WithValue(context.Background(), WorkdirKey, worktreePath)
+	ctx := context.WithValue(context.Background(), WorkdirKey, dir)
 	ctx = context.WithValue(ctx, AgentNameKey, teammate.Name)
+	ctx = context.WithValue(ctx, "session_id", teammate.Name+"-session") // Inject session id for history compaction
 
 	userMsg := &genai.Content{
 		Role: "user",

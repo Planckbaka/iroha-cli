@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -322,9 +323,98 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 				m.SlashMenuItems = nil
 				// Fall through to execute the command
 			}
+			inputVal := m.TextArea.Value()
 
-			inputVal := strings.TrimSpace(m.TextArea.Value())
-			if inputVal == "" {
+			// Intercept Prefix Shortcuts
+			if strings.HasPrefix(inputVal, "!") {
+				m.HistoryManager.Add(inputVal)
+				userLog := StyleUserMsg.Render("> " + inputVal)
+				m.TextArea.SetValue("")
+				m.TextArea.SetHeight(2)
+
+				cmdStr := strings.TrimSpace(inputVal[1:])
+				var replyLog string
+				if cmdStr == "" {
+					replyLog = StyleToolError.Render("[error] Please specify a shell command: !<command>")
+				} else {
+					res, err := agent.ShellRunHandler(nil, agent.ShellRunArgs{Command: cmdStr})
+					if err != nil {
+						replyLog = StyleToolError.Render(fmt.Sprintf("[error] %v", err))
+					} else {
+						if res.ExitCode != 0 {
+							replyLog = StyleToolError.Render(res.Output)
+						} else {
+							replyLog = res.Output
+						}
+					}
+				}
+				m.History = append(m.History, userLog, replyLog)
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			}
+
+			if strings.HasPrefix(inputVal, "#") {
+				m.HistoryManager.Add(inputVal)
+				userLog := StyleUserMsg.Render("> " + inputVal)
+				m.TextArea.SetValue("")
+				m.TextArea.SetHeight(2)
+
+				memVal := strings.TrimSpace(inputVal[1:])
+				var replyLog string
+				if memVal == "" {
+					replyLog = StyleToolError.Render("[error] Please specify memory content: #<text>")
+				} else {
+					words := strings.Fields(memVal)
+					name := "user_preference"
+					if len(words) > 0 {
+						name = strings.ToLower(words[0])
+						if len(words) > 1 {
+							name += "_" + strings.ToLower(words[1])
+						}
+					}
+					reg := regexp.MustCompile(`[^a-z0-9_]`)
+					name = reg.ReplaceAllString(name, "")
+
+					_, err := agent.MemorySaveHandler(nil, agent.MemorySaveArgs{
+						Name:        name,
+						Description: "User preference saved via shortcut",
+						Type:        "user",
+						Content:     memVal,
+					})
+					if err != nil {
+						replyLog = StyleToolError.Render(fmt.Sprintf("[error] %v", err))
+					} else {
+						replyLog = StyleToolSuccess.Render(fmt.Sprintf("Memory saved successfully as %q: %s", name, memVal))
+					}
+				}
+				m.History = append(m.History, userLog, replyLog)
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			}
+
+			if strings.HasPrefix(inputVal, "&") {
+				m.HistoryManager.Add(inputVal)
+				userLog := StyleUserMsg.Render("> " + inputVal)
+				m.TextArea.SetValue("")
+				m.TextArea.SetHeight(2)
+
+				cmdStr := strings.TrimSpace(inputVal[1:])
+				var replyLog string
+				if cmdStr == "" {
+					replyLog = StyleToolError.Render("[error] Please specify a command: &<command>")
+				} else {
+					res, err := agent.BackgroundRunHandler(nil, agent.BackgroundRunArgs{Command: cmdStr})
+					if err != nil {
+						replyLog = StyleToolError.Render(fmt.Sprintf("[error] %v", err))
+					} else {
+						replyLog = StyleToolSuccess.Render(res.Message)
+					}
+				}
+				m.History = append(m.History, userLog, replyLog)
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
 				return m, nil, true
 			}
 
@@ -852,6 +942,103 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 			replyLog = StyleToolSuccess.Render(fmt.Sprintf("Permission level switched to: %s %s", modeArg, desc))
 		}
 		m.History = append(m.History, userLog, replyLog)
+		return m, nil, true
+	}
+
+	if cmdName == "/compact" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+
+		var replyLog string
+		if agent.GlobalSessionService == nil {
+			replyLog = StyleToolError.Render("[error] Session service not initialized")
+		} else {
+			var err error
+			if m.Runner != nil {
+				err = agent.GlobalSessionService.CompactActiveSession(context.Background(), m.SessionID, m.Runner.GetModel())
+			} else {
+				err = agent.GlobalSessionService.CompactActiveSession(context.Background(), m.SessionID)
+			}
+			if err != nil {
+				replyLog = StyleToolError.Render(fmt.Sprintf("[error] Compaction failed: %v", err))
+			} else {
+				replyLog = StyleToolSuccess.Render("Session history compacted successfully! Older rounds summarized to reclaim context window space.")
+			}
+		}
+
+		m.History = append(m.History, userLog, replyLog)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
+		return m, nil, true
+	}
+
+	if cmdName == "/undo" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+
+		count, err := agent.GlobalUndoManager.PopAndUndo()
+		var replyLog string
+		if err != nil {
+			replyLog = StyleToolError.Render(fmt.Sprintf("[error] %v", err))
+		} else {
+			replyLog = StyleToolSuccess.Render(fmt.Sprintf("Undo successful! Reverted %d file(s) changed in the last turn.", count))
+		}
+
+		m.History = append(m.History, userLog, replyLog)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
+		return m, nil, true
+	}
+
+	if cmdName == "/skill" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+
+		var replyLog string
+		if len(parts) < 2 {
+			skills := agent.GlobalSkillManager.AllSkills()
+			if len(skills) == 0 {
+				replyLog = StyleKeyHelp.Render("No skills registered. Place a skill under ~/.iroha/skills/<name>/")
+			} else {
+				var sb strings.Builder
+				sb.WriteString(StyleKeyActive.Render("Available Skills:") + "\n")
+				for i, s := range skills {
+					sb.WriteString(fmt.Sprintf("  %d. \x1b[1;36m%s\x1b[0m (%s) - %s\n", i+1, s.Name, s.ID, s.Description))
+					if len(s.Triggers) > 0 {
+						sb.WriteString(fmt.Sprintf("     Triggers: %s\n", strings.Join(s.Triggers, ", ")))
+					}
+				}
+				replyLog = sb.String()
+			}
+		} else {
+			skillID := parts[1]
+			skill := agent.GlobalSkillManager.GetSkillByID(skillID)
+			if skill == nil {
+				replyLog = StyleToolError.Render(fmt.Sprintf("[error] Skill %q not found", skillID))
+			} else {
+				instructions, err := agent.LoadInstructions(skill)
+				if err != nil {
+					replyLog = StyleToolError.Render(fmt.Sprintf("[error] Failed to load instructions: %v", err))
+				} else {
+					var sb strings.Builder
+					sb.WriteString(StyleKeyActive.Render(fmt.Sprintf("Skill instructions for %s (%s):", skill.Name, skill.ID)) + "\n")
+					sb.WriteString(strings.Repeat("─", 72) + "\n")
+					sb.WriteString(instructions + "\n")
+					sb.WriteString(strings.Repeat("─", 72) + "\n")
+					replyLog = sb.String()
+				}
+			}
+		}
+
+		m.History = append(m.History, userLog, replyLog)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
 		return m, nil, true
 	}
 

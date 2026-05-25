@@ -54,6 +54,9 @@ func (m *GenkitModelAdapter) GenerateContent(ctx context.Context, req *model.LLM
 		}
 
 		compactedContents := req.Contents
+		if m.hooks != nil {
+			compactedContents = m.hooks.CompactHistory(req.Contents)
+		}
 
 		// Inject Nag Reminder if triggered
 		if m.hooks != nil {

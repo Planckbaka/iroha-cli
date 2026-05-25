@@ -171,9 +171,13 @@ func (a *AnthropicAdapter) GenerateContent(ctx context.Context, req *model.LLMRe
 				}
 			}
 		}
+		compactedContents := req.Contents
+		if a.hooks != nil {
+			compactedContents = a.hooks.CompactHistory(req.Contents)
+		}
 
 		// Convert genai Contents to Anthropic messages
-		messages, err := convertToAnthropicMessages(req.Contents)
+		messages, err := convertToAnthropicMessages(compactedContents)
 		if err != nil {
 			yield(nil, err)
 			return
