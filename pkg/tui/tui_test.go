@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"iroha/pkg/agent"
+
 	"github.com/charmbracelet/bubbletea"
 )
 
