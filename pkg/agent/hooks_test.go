@@ -444,6 +444,7 @@ func TestHookManager_ExitCodeCompat(t *testing.T) {
 	})
 	hm.Reload()
 	r3 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	t.Logf("DEBUG: r3.Blocked=%v, r3.BlockReason=%q, r3.Messages=%v", r3.Blocked, r3.BlockReason, r3.Messages)
 	if !r3.Blocked {
 		t.Error("official spec JSON with exit code 2 should block")
 	}
