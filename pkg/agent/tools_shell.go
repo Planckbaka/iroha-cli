@@ -37,6 +37,12 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 	cmd := exec.CommandContext(runCtx, "sh", "-c", args.Command)
 	cmd.Dir = getWorkdir(ctx)
 
+	var err error
+	cmd, err = WrapSandboxCommand(runCtx, cmd, cmd.Dir)
+	if err != nil {
+		return ShellRunResult{}, err
+	}
+
 	var outBuf bytes.Buffer
 	pr, pw := io.Pipe()
 	multiWriter := io.MultiWriter(&outBuf, pw)

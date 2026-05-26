@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,9 +110,25 @@ func (bm *BackgroundManager) Run(command string) (string, error) {
 	return fmt.Sprintf("Background task %s started: %s (output_file=%s)", taskID, truncateString(command, 80), outputFile), nil
 }
 
-// execute executes the shell command in a background goroutine and captures the result.
 func (bm *BackgroundManager) execute(taskID string, command string) {
 	cmd := exec.Command("sh", "-c", command)
+
+	cwd, _ := os.Getwd()
+	if wrappedCmd, sandboxErr := WrapSandboxCommand(context.Background(), cmd, cwd); sandboxErr != nil {
+		bm.mu.Lock()
+		task, ok := bm.tasks[taskID]
+		if ok {
+			task.Status = "error"
+			task.Result = fmt.Sprintf("Failed to initialize sandbox jail: %v", sandboxErr)
+			task.FinishedAt = time.Now()
+			bm.persistTask(task)
+		}
+		bm.mu.Unlock()
+		return
+	} else {
+		cmd = wrappedCmd
+	}
+
 	var outBuf bytes.Buffer
 
 	logPath := filepath.Join(bm.dir, fmt.Sprintf("%s.log", taskID))
