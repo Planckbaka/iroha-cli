@@ -54,6 +54,8 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 	yStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorSuccess)
 	nStyle := lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorDanger)
 	aStyle := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorWarning)
+	eStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorPrimary)
+	qStyle := lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorSecondary)
 
 	if selectedIndex == 0 {
 		yStyle = yStyle.Background(ColorSuccess).Foreground(lipgloss.Color("#18181B"))
@@ -61,6 +63,10 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 		nStyle = nStyle.Background(ColorDanger).Foreground(lipgloss.Color("#18181B"))
 	} else if selectedIndex == 2 {
 		aStyle = aStyle.Background(ColorWarning).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 3 {
+		eStyle = eStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 4 {
+		qStyle = qStyle.Background(ColorSecondary).Foreground(lipgloss.Color("#18181B"))
 	}
 
 	sb.WriteString("  ")
@@ -69,10 +75,14 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 	sb.WriteString(nStyle.Render("N Deny"))
 	sb.WriteString("  ")
 	sb.WriteString(aStyle.Render("A Always Allow"))
+	sb.WriteString("  ")
+	sb.WriteString(eStyle.Render("E Edit"))
+	sb.WriteString("  ")
+	sb.WriteString(qStyle.Render("? Explain"))
 
 	sb.WriteString("\n\n")
 
-	hints := "<- -> / Tab select   Enter confirm   Shortcuts: Y/N/A"
+	hints := "← → / Tab Select   Enter Confirm   Shortcuts: Y / N / A / E / ?"
 	if hasDiff {
 		if diffActive {
 			hints += "   [D] Hide Diff"
@@ -82,9 +92,16 @@ func RenderConfirmCardWithDiff(prompt string, selectedIndex int, hasDiff bool, d
 	}
 	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).Render(hints))
 
+	borderColor := ColorWarning
+	if strings.Contains(prompt, "[file_write]") || strings.Contains(prompt, "[file_read]") {
+		borderColor = ColorSecondary
+	} else if strings.Contains(prompt, "[mcp]") {
+		borderColor = ColorPrimary
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
-		BorderForeground(ColorWarning).
+		BorderForeground(borderColor).
 		Padding(1, 2).
 		MarginTop(1).
 		MarginBottom(1)

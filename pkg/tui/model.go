@@ -114,6 +114,7 @@ var AllSlashCommands = []SlashMenuItem{
 	{"/bg", "View background task status"},
 	{"/skill", "Invoke a registered skill by name (e.g. /skill tdd-workflow)"},
 	{"/trace", "View tool call trace log for the current session"},
+	{"/stats", "View session statistics, performance latency, and token cost details"},
 	{"/sessions", "View and switch session history"},
 	{"/resume", "Resume the most recent session and continue the conversation"},
 	{"/help", "View system help, keyboard shortcuts, and command palette"},
@@ -208,6 +209,10 @@ type Model struct {
 	// Premium interactive Diff fields
 	ConfirmDiffText   string
 	ConfirmDiffActive bool
+
+	// Premium interactive Edit fields during confirmation
+	ConfirmEditActive bool
+	ConfirmEditText   string
 }
 
 func SetupTextArea() textarea.Model {
@@ -367,23 +372,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd = tea.Batch(cmd, vpCmd)
 
 	// Update text area only in prompt state, then update slash menu filter
-	if m.State == statePrompt {
+	if m.State == statePrompt || (m.State == stateConfirming && m.ConfirmEditActive) {
 		prevVal := m.TextArea.Value()
 		var taCmd tea.Cmd
 		m.TextArea, taCmd = m.TextArea.Update(msg)
 		cmd = tea.Batch(cmd, taCmd)
 		newVal := m.TextArea.Value()
-		// Update slash menu if the input changed
-		if newVal != prevVal {
-			m.updateSlashMenu(newVal)
 
-			// Reset path completion cycle if text changed via a non-Tab key
-			isKeyTab := false
-			if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.Type == tea.KeyTab {
-				isKeyTab = true
-			}
-			if !isKeyTab {
-				m.resetPathCompletion()
+		if m.State == statePrompt {
+			// Update slash menu if the input changed
+			if newVal != prevVal {
+				m.updateSlashMenu(newVal)
+
+				// Reset path completion cycle if text changed via a non-Tab key
+				isKeyTab := false
+				if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.Type == tea.KeyTab {
+					isKeyTab = true
+				}
+				if !isKeyTab {
+					m.resetPathCompletion()
+				}
 			}
 		}
 
@@ -420,6 +428,8 @@ func (m *Model) finalizeTurn() tea.Cmd {
 	m.RenderedText = ""
 	m.PendingText = ""
 	m.LastRenderedLen = 0
+	m.ConfirmEditActive = false
+	m.ConfirmEditText = ""
 
 	// Update token count and cost estimation
 	if m.Runner != nil {
@@ -478,6 +488,17 @@ func (m *Model) renderIncremental() {
 }
 
 func (m *Model) renderViewportContent() string {
+	// If interactive Edit is active, render editing instructions in the viewport
+	if m.State == stateConfirming && m.ConfirmEditActive {
+		var sb strings.Builder
+		sb.WriteString(lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("Editing Tool Arguments") + "\n\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("Modify the arguments in the input area at the bottom:") + "\n\n")
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Render("Tool: ") + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(m.ActiveTool.Name) + "\n\n")
+		sb.WriteString("  Press " + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("Enter") + " to run with modified arguments.\n")
+		sb.WriteString("  Press " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("Esc") + " to cancel editing.\n\n")
+		return sb.String()
+	}
+
 	// If interactive Diff is active during confirmation, only render the Diff view in the Viewport
 	if m.State == stateConfirming && m.ConfirmDiffActive && m.ConfirmDiffText != "" {
 		return m.ConfirmDiffText + "\n\n" + RenderConfirmCardWithDiff(m.ConfirmationPrompt, m.ConfirmSelectIndex, true, true)
@@ -792,3 +813,23 @@ func (m *Model) resetPathCompletion() {
 	m.PathCompletionOriginal = ""
 	m.PathCompletionRest = ""
 }
+
+// getEditableValue extracts the editable command or content string from active tool arguments.
+func (m Model) getEditableValue() string {
+	if m.ActiveTool.Args == nil {
+		return ""
+	}
+	if argMap, ok := m.ActiveTool.Args.(map[string]any); ok {
+		if cmd, ok := argMap["command"].(string); ok {
+			return cmd
+		}
+		if content, ok := argMap["content"].(string); ok {
+			return content
+		}
+		if path, ok := argMap["path"].(string); ok {
+			return path
+		}
+	}
+	return ""
+}
+

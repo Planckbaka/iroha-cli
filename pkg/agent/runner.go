@@ -89,6 +89,9 @@ func (b *ConfirmationBridge) Cancel() {
 // GlobalSessionService is the persistent session store wrapper singleton.
 var GlobalSessionService *PersistentSessionService
 
+// globalLLMModel is the current LLM model adapter for dynamic prompts/explanations.
+var globalLLMModel model.LLM
+
 // ToolStatus represents the real-time execution state of a tool
 type ToolStatus struct {
 	Name        string
@@ -258,6 +261,8 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	GlobalTeamManager.ProcessMessage = func(teammate *Teammate, msg TeamMessage) (string, error) {
 		return GlobalAgentPool.ExecuteMessage(teammate, msg)
 	}
+
+	globalLLMModel = modelAdapter
 
 	return &CustomRunner{
 		adkRunner:       adkRunner,
@@ -697,26 +702,93 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 		promptMsg = fmt.Sprintf("%s\x1b[1;35m[%s]\x1b[0m attempting to execute: %v\n   Reason: %s", prefix, b.Name(), args, reason)
 	}
 
-	llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())
-	// Send to TUI with cancellation support
-	LogAudit(CatToolCall, "confirmation_sent", fmt.Sprintf("Sending confirmation prompt to TUI for tool %s", b.Name()), map[string]any{
-		"tool":   b.Name(),
-		"prompt": promptMsg,
-	})
-	select {
-	case Bridge.PromptChan <- promptMsg:
-	case <-Bridge.CancelChanRead():
-		LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
-		return nil, fmt.Errorf("operation cancelled")
-	}
-
-	// Block on response with cancellation support
 	var approved string
-	select {
-	case approved = <-Bridge.ResponseChan:
-	case <-Bridge.CancelChanRead():
-		LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
-		return nil, fmt.Errorf("operation cancelled")
+	for {
+		llm.DebugLog("[CONFIRM-TOOL] Sending to PromptChan: tool=%s", b.Name())
+		// Send to TUI with cancellation support
+		LogAudit(CatToolCall, "confirmation_sent", fmt.Sprintf("Sending confirmation prompt to TUI for tool %s", b.Name()), map[string]any{
+			"tool":   b.Name(),
+			"prompt": promptMsg,
+		})
+		select {
+		case Bridge.PromptChan <- promptMsg:
+		case <-Bridge.CancelChanRead():
+			LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
+			return nil, fmt.Errorf("operation cancelled")
+		}
+
+		// Block on response with cancellation support
+		select {
+		case approved = <-Bridge.ResponseChan:
+		case <-Bridge.CancelChanRead():
+			LogToolTrace(b.Name(), args, "blocked", time.Since(toolStartTime).Milliseconds())
+			return nil, fmt.Errorf("operation cancelled")
+		}
+
+		if approved == "explain" {
+			// Query the LLM model to explain this tool execution
+			var explanation string
+			if globalLLMModel != nil {
+				explainPrompt := fmt.Sprintf(`The AI Agent is attempting to execute the following tool:
+Tool Name: %s
+Arguments: %v
+Reason: %s
+
+Please explain in 1-2 simple, professional sentences why this tool call is necessary for the current task, and any potential technical or safety implications. Do not use any markdown formatting, prefix, bold text or introductory phrases. Output only the plain explanation text itself.`, b.Name(), args, reason)
+
+				req := &model.LLMRequest{
+					Contents: []*genai.Content{
+						{
+							Role: "user",
+							Parts: []*genai.Part{
+								{Text: explainPrompt},
+							},
+						},
+					},
+				}
+
+				var explainBuilder strings.Builder
+				events := globalLLMModel.GenerateContent(ctx, req, false)
+				for resp, err := range events {
+					if err == nil && resp != nil && resp.Content != nil && len(resp.Content.Parts) > 0 {
+						explainBuilder.WriteString(resp.Content.Parts[0].Text)
+					}
+				}
+				explanation = strings.TrimSpace(explainBuilder.String())
+			}
+			if explanation == "" {
+				explanation = fmt.Sprintf("Executing %s is requested to perform current task steps safely under context reasons: %s.", b.Name(), reason)
+			}
+
+			// Append explanation to promptMsg and prompt again
+			promptMsg = fmt.Sprintf("%s\n\n\x1b[1;32m[AI Explanation]:\x1b[0m\n%s", promptMsg, explanation)
+			continue
+		}
+
+		if strings.HasPrefix(approved, "edit:") {
+			editedVal := strings.TrimPrefix(approved, "edit:")
+			// Dynamically update the arguments!
+			if m, ok := args.(map[string]any); ok {
+				if _, ok := m["command"]; ok {
+					m["command"] = editedVal
+				} else if _, ok := m["content"]; ok {
+					m["content"] = editedVal
+				} else if _, ok := m["path"]; ok {
+					m["path"] = editedVal
+				}
+			} else {
+				// Handle structured struct
+				if w, ok := args.(FileWriteArgs); ok {
+					w.Content = editedVal
+					args = w
+				} else if w, ok := args.(*FileWriteArgs); ok {
+					w.Content = editedVal
+				}
+			}
+			approved = "y" // Once edited, auto-approve the edited command/content
+		}
+
+		break
 	}
 
 	llm.DebugLog("[CONFIRM-TOOL] Executing tool after approval: tool=%s approved=%s", b.Name(), approved)

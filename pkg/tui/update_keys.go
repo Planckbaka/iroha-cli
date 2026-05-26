@@ -128,30 +128,56 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 	// Handle confirmation state FIRST — before any TextArea processing
 	if m.State == stateConfirming {
+		if m.ConfirmEditActive {
+			// In interactive editing mode during confirmation
+			switch msg.Type {
+			case tea.KeyEnter:
+				// Finish editing and submit
+				editedVal := m.TextArea.Value()
+				m.ConfirmEditActive = false
+				m = m.transitionTo(stateThinking)
+				m.TextArea.SetValue("")
+				m.TextArea.Blur()
+				agent.Bridge.ResponseChan <- "edit:" + editedVal
+				m.ConfirmationListenerActive = true
+				return m, m.listenToConfirmationBridge(), true
+			case tea.KeyEscape:
+				// Cancel editing, return to selection
+				m.ConfirmEditActive = false
+				m.TextArea.SetValue("")
+				m.TextArea.Blur()
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			default:
+				// Pass other keys to TextArea
+				return m, nil, true
+			}
+		}
+
 		keyStr := strings.ToLower(msg.String())
 		switch msg.Type {
 		case tea.KeyLeft:
-			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 5) % 5
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
 			return m, nil, true
 		case tea.KeyRight:
-			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
+			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 5
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
 			return m, nil, true
 		case tea.KeyTab:
-			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 3
+			m.ConfirmSelectIndex = (m.ConfirmSelectIndex + 1) % 5
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
 			return m, nil, true
 		case tea.KeyShiftTab:
-			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 5) % 5
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
 			return m, nil, true
 		case tea.KeyEnter:
-			m = m.transitionTo(stateThinking)
 			var resp string
 			switch m.ConfirmSelectIndex {
 			case 0:
@@ -160,7 +186,20 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 				resp = "n"
 			case 2:
 				resp = "always"
+			case 3:
+				// Edit action
+				m.ConfirmEditActive = true
+				m.ConfirmEditText = m.getEditableValue()
+				m.TextArea.SetValue(m.ConfirmEditText)
+				m.TextArea.Focus()
+				m.TextArea.SetCursor(len(m.ConfirmEditText))
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			case 4:
+				resp = "explain"
 			}
+			m = m.transitionTo(stateThinking)
 			agent.Bridge.ResponseChan <- resp
 			m.ConfirmationListenerActive = true
 			return m, m.listenToConfirmationBridge(), true
@@ -193,8 +232,22 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			agent.Bridge.ResponseChan <- "always"
 			m.ConfirmationListenerActive = true
 			return m, m.listenToConfirmationBridge(), true
+		case "e":
+			m.ConfirmEditActive = true
+			m.ConfirmEditText = m.getEditableValue()
+			m.TextArea.SetValue(m.ConfirmEditText)
+			m.TextArea.Focus()
+			m.TextArea.SetCursor(len(m.ConfirmEditText))
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		case "?", "explain":
+			m = m.transitionTo(stateThinking)
+			agent.Bridge.ResponseChan <- "explain"
+			m.ConfirmationListenerActive = true
+			return m, m.listenToConfirmationBridge(), true
 		case "shift+tab":
-			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 3) % 3
+			m.ConfirmSelectIndex = (m.ConfirmSelectIndex - 1 + 5) % 5
 			m.Viewport.SetContent(m.renderViewportContent())
 			m.Viewport.GotoBottom()
 			return m, nil, true
@@ -314,6 +367,11 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 	case tea.KeyEnter:
 		if m.State == statePrompt {
+			if msg.Alt {
+				m.TextArea.InsertString("\n")
+				return m, nil, true
+			}
+
 			// If slash menu is active and user presses Enter, execute selected command
 			if m.SlashMenuActive && len(m.SlashMenuItems) > 0 {
 				selected := m.SlashMenuItems[m.SlashMenuIndex]
@@ -730,6 +788,63 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		m.History = append(m.History, userLog, sb.String())
 		m.TextArea.SetValue("")
 		m.TextArea.SetHeight(2)
+		return m, nil, true
+	}
+
+	if cmdName == "/stats" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+
+		var sb strings.Builder
+		sb.WriteString(StyleKeyActive.Render("📈 Session Statistics & Telemetry") + "\n")
+		sb.WriteString(strings.Repeat("─", 60) + "\n")
+
+		modelName := "Unknown"
+		if m.Runner != nil {
+			modelName = m.Runner.ModelName()
+		}
+
+		sessionDuration := time.Since(m.SessionStartTime).Round(time.Second)
+
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Session ID", StylePrompt.Render(m.SessionID)))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Active LLM Model", StylePrompt.Render(modelName)))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Permission Mode", StylePrompt.Render(string(agent.GlobalPermissionManager.GetMode()))))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %d\n", "Interaction Rounds", m.RoundCount))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Session Running Time", sessionDuration))
+
+		tokStr := "-"
+		costStr := "-"
+		velocityStr := "-"
+
+		if m.TotalTokens > 0 {
+			tokStr = fmt.Sprintf("%d tokens", m.TotalTokens)
+			if m.TotalSessionCost > 0 {
+				costStr = fmt.Sprintf("$%.4f USD", m.TotalSessionCost)
+			} else {
+				costStr = "$0.0000 USD"
+			}
+			sec := time.Since(m.SessionStartTime).Seconds()
+			if sec > 0.5 {
+				velocityStr = fmt.Sprintf("%.2f tokens/sec", float64(m.TotalTokens)/sec)
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Tokens Consumed", tokStr))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Estimated Session Cost", costStr))
+		sb.WriteString(fmt.Sprintf("  %-22s :  %s\n", "Token Velocity", velocityStr))
+
+		cardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorPrimary).
+			Padding(0, 1).
+			MarginTop(1).
+			MarginBottom(1)
+
+		m.History = append(m.History, userLog, cardStyle.Render(sb.String())+"\n")
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+		m.Viewport.SetContent(m.renderViewportContent())
+		m.Viewport.GotoBottom()
 		return m, nil, true
 	}
 

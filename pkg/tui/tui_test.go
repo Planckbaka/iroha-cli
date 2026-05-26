@@ -319,3 +319,78 @@ func TestModelDiffToggleKeyAction(t *testing.T) {
 		t.Error("expected ConfirmDiffActive to toggle back to false")
 	}
 }
+
+func TestGetEditableValue(t *testing.T) {
+	m := Model{}
+
+	// 1. Nil ActiveTool Args
+	if val := m.getEditableValue(); val != "" {
+		t.Errorf("expected empty string when active tool args is nil, got '%s'", val)
+	}
+
+	// 2. shell_run command extraction
+	m.ActiveTool = agent.ToolStatus{
+		Name: "shell_run",
+		Args: map[string]any{"command": "echo hello"},
+	}
+	if val := m.getEditableValue(); val != "echo hello" {
+		t.Errorf("expected extracted command to be 'echo hello', got '%s'", val)
+	}
+
+	// 3. file_write content extraction
+	m.ActiveTool = agent.ToolStatus{
+		Name: "file_write",
+		Args: map[string]any{"content": "print('hello')"},
+	}
+	if val := m.getEditableValue(); val != "print('hello')" {
+		t.Errorf("expected extracted content to be 'print(\\'hello\\')', got '%s'", val)
+	}
+}
+
+func TestConfirmationFiveOptions(t *testing.T) {
+	m := NewModel(nil, "test-session", false, "auto", "hello")
+	m.State = stateConfirming
+	m.ConfirmSelectIndex = 0
+
+	// 1. Cycle right (Y -> N -> Always -> Edit -> Explain)
+	res, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	newM := res.(Model)
+	if newM.ConfirmSelectIndex != 1 {
+		t.Errorf("expected cycling right once to select index 1, got %d", newM.ConfirmSelectIndex)
+	}
+
+	// 2. Cycle right 4 times (wrapping around back to Y)
+	for i := 0; i < 4; i++ {
+		res, _ = newM.Update(tea.KeyMsg{Type: tea.KeyRight})
+		newM = res.(Model)
+	}
+	if newM.ConfirmSelectIndex != 0 {
+		t.Errorf("expected wrapping around to 0, got %d", newM.ConfirmSelectIndex)
+	}
+
+	// 3. RenderConfirmCardWithDiff rendering check for E Edit and ? Explain buttons
+	card := RenderConfirmCardWithDiff("Authorize writing file?", 3, false, false)
+	if !strings.Contains(card, "E Edit") || !strings.Contains(card, "? Explain") {
+		t.Error("expected RenderConfirmCardWithDiff to contain E Edit and ? Explain buttons")
+	}
+}
+
+func TestStatsSlashCommand(t *testing.T) {
+	m := NewModel(nil, "test-session", false, "auto", "hello")
+	m.State = statePrompt
+	m.TextArea.SetValue("/stats")
+
+	// Trigger stats slash command
+	res, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM := res.(Model)
+
+	if len(newM.History) == 0 {
+		t.Fatal("expected slash command execution to add logs to History")
+	}
+
+	lastLog := newM.History[len(newM.History)-1]
+	if !strings.Contains(lastLog, "Session Statistics & Telemetry") || !strings.Contains(lastLog, "Interaction Rounds") {
+		t.Errorf("expected History to contain telemetry details, got:\n%s", lastLog)
+	}
+}
+
