@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"iter"
 	"net/http"
 	"net/http/httptest"
