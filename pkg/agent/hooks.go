@@ -377,7 +377,7 @@ func (hm *HookManager) runHTTP(event HookEvent, def HookDef, ctx HookContext) Ho
 		return HookResult{Blocked: true, BlockReason: fmt.Sprintf("failed to read http hook response body: %v", err)}
 	}
 
-	return parseJSONResult(event, bodyBytes, durationMS, ctx)
+	return parseJSONResult(event, bodyBytes, durationMS, ctx, 0)
 }
 
 // runLLMPrompt executes an LLM-based prompt compliance hook
@@ -468,7 +468,7 @@ or:
 		}
 	}
 
-	return parseJSONResult(event, []byte(responseText), durationMS, ctx)
+	return parseJSONResult(event, []byte(responseText), durationMS, ctx, 0)
 }
 
 // runCommand executes a shell subprocess hook (legacy mode)
@@ -593,7 +593,7 @@ func (hm *HookManager) runCommand(event HookEvent, def HookDef, ctx HookContext)
 	}
 
 	if isJSON {
-		return parseJSONResult(event, stdoutBytes, durationMS, ctx)
+		return parseJSONResult(event, stdoutBytes, durationMS, ctx, exitCode)
 	}
 
 	// Legacy exit-code protocol
@@ -637,7 +637,7 @@ func (hm *HookManager) runCommand(event HookEvent, def HookDef, ctx HookContext)
 }
 
 // helper to parse Hook response JSON
-func parseJSONResult(event HookEvent, jsonBytes []byte, durationMS int64, ctx HookContext) HookResult {
+func parseJSONResult(event HookEvent, jsonBytes []byte, durationMS int64, ctx HookContext, exitCode int) HookResult {
 	var jsonOutput struct {
 		Decision           string         `json:"decision,omitempty"`
 		Reason             string         `json:"reason,omitempty"`
@@ -679,6 +679,17 @@ func parseJSONResult(event HookEvent, jsonBytes []byte, durationMS int64, ctx Ho
 		blockReason = reason
 		if blockReason == "" {
 			blockReason = "blocked by hook decision (deny)"
+		}
+	}
+
+	if exitCode == 2 {
+		blocked = true
+		if blockReason == "" {
+			if reason != "" {
+				blockReason = reason
+			} else {
+				blockReason = "blocked by hook exit code 2"
+			}
 		}
 	}
 
