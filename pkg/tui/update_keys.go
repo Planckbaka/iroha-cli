@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"iroha/pkg/agent"
+	"iroha/pkg/config"
+	"iroha/pkg/llm"
 
 	"github.com/atotto/clipboard"
 	"github.com/aymanbagabas/go-osc52/v2"
@@ -252,6 +255,118 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			m.Viewport.GotoBottom()
 			return m, nil, true
 		default:
+			return m, nil, true
+		}
+	}
+	
+	if m.State == statePrompt && msg.Type == tea.KeyCtrlG {
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "nano"
+		}
+
+		tmpFile, err := os.CreateTemp("", "iroha-prompt-*.txt")
+		if err != nil {
+			m.History = append(m.History, StyleToolError.Render(fmt.Sprintf("[error] Failed to create temp file: %v", err)))
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		}
+		tmpPath := tmpFile.Name()
+
+		_, _ = tmpFile.WriteString(m.TextArea.Value())
+		_ = tmpFile.Close()
+
+		c := exec.Command(editor, tmpPath)
+
+		execCmd := tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return ExternalEditorFinishedMsg{Err: err}
+			}
+			data, readErr := os.ReadFile(tmpPath)
+			_ = os.Remove(tmpPath)
+			if readErr != nil {
+				return ExternalEditorFinishedMsg{Err: readErr}
+			}
+			return ExternalEditorFinishedMsg{Content: string(data)}
+		})
+
+		return m, execCmd, true
+	}
+
+	if m.State == statePrompt && strings.ToLower(msg.String()) == "alt+p" {
+		type modelEntry struct {
+			Provider  llm.ProviderType
+			Model     string
+			APIFormat llm.APIFormat
+			EnvKey    string
+		}
+		cycleModels := []modelEntry{
+			{llm.ProviderClaude, "claude-sonnet-4-6", llm.APIFormatAnthropic, "ANTHROPIC_API_KEY"},
+			{llm.ProviderOpenAI, "gpt-4o", llm.APIFormatOpenAI, "OPENAI_API_KEY"},
+			{llm.ProviderDeepSeek, "deepseek-chat", llm.APIFormatOpenAI, "DEEPSEEK_API_KEY"},
+			{llm.ProviderGLM, "glm-4", llm.APIFormatOpenAI, "ZHIPU_API_KEY"},
+			{llm.ProviderKimi, "kimi-k2.6", llm.APIFormatOpenAI, "MOONSHOT_API_KEY"},
+			{llm.ProviderSiliconFlow, "deepseek-ai/DeepSeek-V3", llm.APIFormatOpenAI, "SILICONFLOW_API_KEY"},
+		}
+
+		curProvider := m.Runner.Provider
+		curModel := m.Runner.ActiveModelName
+		curIdx := -1
+		for i, entry := range cycleModels {
+			if entry.Provider == curProvider && entry.Model == curModel {
+				curIdx = i
+				break
+			}
+		}
+
+		cfg, _ := config.LoadConfig()
+
+		var chosen modelEntry
+		var apiKey string
+		var baseURL string
+		found := false
+
+		for step := 1; step <= len(cycleModels); step++ {
+			nextIdx := (curIdx + step) % len(cycleModels)
+			next := cycleModels[nextIdx]
+
+			key := os.Getenv(next.EnvKey)
+			if key == "" && cfg != nil && cfg.Provider == string(next.Provider) {
+				key = cfg.APIKey
+			}
+
+			if key != "" {
+				chosen = next
+				apiKey = key
+				found = true
+
+				if cfg != nil && cfg.Provider == string(next.Provider) && cfg.BaseURL != "" {
+					baseURL = cfg.BaseURL
+				} else {
+					baseURL = config.DefaultProviderConfig(string(next.Provider)).BaseURL
+				}
+				break
+			}
+		}
+
+		if found {
+			err := m.Runner.SwitchModel(chosen.Provider, chosen.Model, apiKey, baseURL, chosen.APIFormat)
+			var replyLog string
+			if err != nil {
+				replyLog = StyleToolError.Render(fmt.Sprintf("[error] Failed to switch model: %v", err))
+			} else {
+				replyLog = StyleToolSuccess.Render(fmt.Sprintf("LLM provider & model hot-switched to: %s (%s)", chosen.Model, chosen.Provider))
+			}
+			m.History = append(m.History, replyLog)
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		} else {
+			replyLog := StyleToolError.Render("[error] No other provider API Keys found in environment or ~/.iroha.json. Configure keys to enable Alt+P model switching.")
+			m.History = append(m.History, replyLog)
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
 			return m, nil, true
 		}
 	}

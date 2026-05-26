@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -80,6 +81,11 @@ type AgentDoneMsg struct{}
 
 type DoctorResultMsg struct {
 	Report string
+}
+
+type ExternalEditorFinishedMsg struct {
+	Content string
+	Err     error
 }
 
 func runDoctorCmd() tea.Cmd {
@@ -358,6 +364,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if newM, keyCmd, handled := m.handleKeyMsg(msg); handled {
 			return newM, keyCmd
 		}
+
+	case ExternalEditorFinishedMsg:
+		if msg.Err != nil {
+			m.History = append(m.History, StyleToolError.Render(fmt.Sprintf("[error] External editor failed: %v", msg.Err)))
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+		} else {
+			m.TextArea.SetValue(msg.Content)
+			m.TextArea.SetCursor(len(msg.Content))
+		}
+		return m, nil
 
 	default:
 		// Attempt to process custom agent events

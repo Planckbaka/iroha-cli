@@ -486,6 +486,14 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	spawnSubagentTool, err := functiontool.New(functiontool.Config{
+		Name:        "spawn_subagent",
+		Description: "Spawn and run a synchronous subagent to execute a specific subtask (e.g. read, search, code review, or file changes) in an isolated, sandboxed execution scope and return a summary of findings.",
+	}, SpawnSubagentHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	// s21 LSP Tools — load user LSP server config if available
 	if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
 		servers := make([]LSPServerConfig, len(cfg.LSPServers))
@@ -563,6 +571,7 @@ func GetSWETools() ([]tool.Tool, error) {
 		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool, lspHoverTool, lspDiagTool,
 		// s22
 		webFetchTool, webSearchTool,
+		spawnSubagentTool,
 	}
 
 	// s19 Dynamic MCP Tools
