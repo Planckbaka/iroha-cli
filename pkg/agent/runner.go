@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -144,10 +145,56 @@ func (tb *ToolStatusBridge) drain() {
 	}
 }
 
+// DynamicLLMDelegator is a thread-safe delegator that allows changing the active model at runtime.
+type DynamicLLMDelegator struct {
+	mu           sync.RWMutex
+	currentModel model.LLM
+}
+
+func (d *DynamicLLMDelegator) Name() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.currentModel.Name()
+}
+
+func (d *DynamicLLMDelegator) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	d.mu.RLock()
+	m := d.currentModel
+	d.mu.RUnlock()
+	return m.GenerateContent(ctx, req, stream)
+}
+
+func (d *DynamicLLMDelegator) SetModel(m model.LLM) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.currentModel = m
+}
+
+func (d *DynamicLLMDelegator) CumulativeTokens() int {
+	d.mu.RLock()
+	m := d.currentModel
+	d.mu.RUnlock()
+	if tt, ok := m.(llm.TokenTracker); ok {
+		return tt.CumulativeTokens()
+	}
+	return 0
+}
+
+func (d *DynamicLLMDelegator) AddTokens(n int) {
+	d.mu.Lock()
+	m := d.currentModel
+	d.mu.Unlock()
+	if tt, ok := m.(llm.TokenTracker); ok {
+		tt.AddTokens(n)
+	}
+}
+
 // CustomRunner wraps ADK runner and manages background execution
 type CustomRunner struct {
+	mu              sync.RWMutex
 	adkRunner       *runner.Runner
 	llmModel        model.LLM
+	delegator       *DynamicLLMDelegator
 	Provider        llm.ProviderType
 	ActiveModelName string
 	APIKey          string
@@ -206,10 +253,12 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		instruction = baseInstruction + "\n\n" + memSection
 	}
 
+	delegator := &DynamicLLMDelegator{currentModel: modelAdapter}
+
 	rootAgent, err := llmagent.New(llmagent.Config{
 		Name:        "iroha-agent",
 		Instruction: instruction,
-		Model:       modelAdapter,
+		Model:       delegator,
 		Tools:       wrappedTools,
 	})
 
@@ -269,6 +318,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 	return &CustomRunner{
 		adkRunner:       adkRunner,
 		llmModel:        modelAdapter,
+		delegator:       delegator,
 		Provider:        provider,
 		ActiveModelName: modelName,
 		APIKey:          apiKey,
@@ -276,6 +326,54 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		APIFormat:       apiFormat,
 		GenkitRegistry:  g,
 	}, nil
+}
+
+func (cr *CustomRunner) SwitchModel(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) error {
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+
+	var g *genkit.Genkit
+	switch provider {
+	case llm.ProviderGemini, llm.ProviderClaude:
+		ctx := context.Background()
+		var plugins []api.Plugin
+		switch provider {
+		case llm.ProviderGemini:
+			plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
+		case llm.ProviderClaude:
+			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
+		}
+		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	}
+
+	systemPrompt := buildSystemPrompt()
+	newAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
+	if err != nil {
+		return fmt.Errorf("failed to create model adapter: %w", err)
+	}
+
+	cr.delegator.SetModel(newAdapter)
+	cr.llmModel = newAdapter
+	cr.Provider = provider
+	cr.ActiveModelName = modelName
+	cr.APIKey = apiKey
+	cr.BaseURL = baseURL
+	cr.APIFormat = apiFormat
+	cr.GenkitRegistry = g
+
+	GlobalAgentPool.mu.Lock()
+	GlobalAgentPool.Provider = provider
+	GlobalAgentPool.ModelName = modelName
+	GlobalAgentPool.APIKey = apiKey
+	GlobalAgentPool.BaseURL = baseURL
+	GlobalAgentPool.APIFormat = apiFormat
+	GlobalAgentPool.GenkitRegistry = g
+	GlobalAgentPool.mu.Unlock()
+
+	SetAutoReviewConfig(newAdapter)
+	globalLLMModel = newAdapter
+
+	return nil
 }
 
 func (cr *CustomRunner) ModelName() string {

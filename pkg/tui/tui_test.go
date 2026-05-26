@@ -395,4 +395,3 @@ func TestStatsSlashCommand(t *testing.T) {
 		t.Errorf("expected History to contain telemetry details, got:\n%s", lastLog)
 	}
 }
-

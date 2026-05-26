@@ -832,4 +832,3 @@ func (m Model) getEditableValue() string {
 	}
 	return ""
 }
-

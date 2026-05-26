@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeHooksConfig writes a HookConfig to a temp file and returns its path.
@@ -456,6 +457,51 @@ func TestHookManager_ExitCodeCompat(t *testing.T) {
 	allMsgs := strings.Join(r4.Messages, " ")
 	if len(r4.Messages) == 0 || !strings.Contains(allMsgs, "json msg") {
 		t.Errorf("expected messages to contain 'json msg', got %v", r4.Messages)
+	}
+}
+
+// ─── Async Hooks ──────────────────────────────────────────────────────────
+
+func TestHookManager_AsyncHooks(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "async_side_effect.txt")
+	// An async hook that sleeps briefy then writes to a file
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{
+					Command: `sleep 0.1; echo "async done" > ` + outFile,
+					Async:   true,
+				},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	// RunHooks should return immediately
+	start := time.Now()
+	result := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	elapsed := time.Since(start)
+
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("expected RunHooks to return immediately, took %v", elapsed)
+	}
+	if result.Blocked {
+		t.Error("async hook should not block")
+	}
+
+	// Wait up to 1 second for the side effect to write
+	var found bool
+	for i := 0; i < 20; i++ {
+		if _, err := os.Stat(outFile); err == nil {
+			found = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if !found {
+		t.Error("expected async side effect file to be written in background")
 	}
 }
 

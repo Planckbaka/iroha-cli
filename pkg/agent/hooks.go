@@ -49,6 +49,8 @@ type HookDef struct {
 	// "proceed" (default) means fail-open: log and continue.
 	// "block" means fail-closed: treat timeout as a block.
 	OnTimeout string `json:"on_timeout,omitempty"`
+	// Async controls whether the hook runs in the background.
+	Async bool `json:"async,omitempty"`
 }
 
 // HookConfig mirrors the structure of a hooks.json config file.
@@ -250,6 +252,13 @@ func (hm *HookManager) RunHooks(event HookEvent, ctx HookContext) HookResult {
 			continue
 		}
 
+		if def.Async {
+			go func(d HookDef, c HookContext) {
+				_ = hm.runOne(event, d, c)
+			}(def, ctx)
+			continue
+		}
+
 		hr := hm.runOne(event, def, ctx)
 		if hr.Blocked {
 			// First block wins — short-circuit remaining hooks
@@ -392,10 +401,10 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 
 	// Try parsing stdout JSON if present
 	var stdoutJSON struct {
-		Decision      string         `json:"decision,omitempty"`
-		Reason        string         `json:"reason,omitempty"`
-		Message       string         `json:"message,omitempty"`
-		Modifications map[string]any `json:"modifications,omitempty"`
+		Decision           string         `json:"decision,omitempty"`
+		Reason             string         `json:"reason,omitempty"`
+		Message            string         `json:"message,omitempty"`
+		Modifications      map[string]any `json:"modifications,omitempty"`
 		HookSpecificOutput *struct {
 			HookEventName            string         `json:"hookEventName,omitempty"`
 			PermissionDecision       string         `json:"permissionDecision,omitempty"`

@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TeamMessage represents a message sent to a teammate's inbox.
@@ -85,20 +88,123 @@ func (tm *TeamManager) LoadConfig() error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			tm.teammates = make(map[string]*Teammate)
+		} else {
+			return fmt.Errorf("failed to read team config: %w", err)
 		}
-		return fmt.Errorf("failed to read team config: %w", err)
+	} else {
+		var cfg TeamConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return fmt.Errorf("failed to parse team config: %w", err)
+		}
+
+		tm.teammates = make(map[string]*Teammate)
+		for i := range cfg.Teammates {
+			t := cfg.Teammates[i]
+			tm.teammates[t.Name] = &t
+		}
 	}
 
-	var cfg TeamConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("failed to parse team config: %w", err)
+	_ = tm.loadYAMLAgents()
+	return nil
+}
+
+// loadYAMLAgents dynamically scans and registers YAML-declared subagents from (.iroha/agents/ & .claude/agents/)
+func (tm *TeamManager) loadYAMLAgents() error {
+	var searchDirs []string
+
+	// Local project directories
+	if cwd, err := os.Getwd(); err == nil {
+		searchDirs = append(searchDirs,
+			filepath.Join(cwd, ".iroha", "agents"),
+			filepath.Join(cwd, ".claude", "agents"),
+		)
 	}
 
-	tm.teammates = make(map[string]*Teammate)
-	for i := range cfg.Teammates {
-		t := cfg.Teammates[i]
-		tm.teammates[t.Name] = &t
+	// User home directories
+	if home, err := os.UserHomeDir(); err == nil {
+		searchDirs = append(searchDirs,
+			filepath.Join(home, ".iroha", "agents"),
+			filepath.Join(home, ".claude", "agents"),
+		)
+	}
+
+	type yamlMeta struct {
+		Name        string `yaml:"name"`
+		Role        string `yaml:"role,omitempty"`
+		Description string `yaml:"description,omitempty"`
+		Type        string `yaml:"type,omitempty"`
+	}
+
+	for _, dir := range searchDirs {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue // skip directory if doesn't exist
+		}
+
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(file.Name()))
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+
+			filePath := filepath.Join(dir, file.Name())
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+
+			// Parse frontmatter
+			content := string(data)
+			var frontmatter string
+			var systemPrompt string
+
+			if strings.HasPrefix(content, "---") {
+				// Format:
+				// ---
+				// yaml metadata
+				// ---
+				// system prompt
+				parts := strings.SplitN(content, "---", 3)
+				if len(parts) >= 3 {
+					frontmatter = parts[1]
+					systemPrompt = strings.TrimSpace(parts[2])
+				} else {
+					frontmatter = content
+				}
+			} else {
+				frontmatter = content
+			}
+
+			var meta yamlMeta
+			if err := yaml.Unmarshal([]byte(frontmatter), &meta); err != nil {
+				continue // bad YAML metadata, skip
+			}
+
+			if meta.Name == "" {
+				continue
+			}
+
+			role := meta.Role
+			if role == "" {
+				role = meta.Description
+			}
+			if role == "" {
+				role = "Specialist Agent"
+			}
+
+			tm.teammates[meta.Name] = &Teammate{
+				Name:         meta.Name,
+				Role:         role,
+				Type:         meta.Type,
+				SystemPrompt: systemPrompt,
+				Status:       "idle",
+				LastActive:   time.Now(),
+			}
+		}
 	}
 	return nil
 }
