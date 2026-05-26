@@ -99,7 +99,8 @@ func TestSubagent_ResolveLogsDir(t *testing.T) {
 	defer func() { _ = os.Chdir(originalWD) }()
 
 	logsDir, _ := filepath.EvalSymlinks(ResolveSubagentLogsDir())
-	expectedDir, _ := filepath.EvalSymlinks(filepath.Join(tempDir, ".iroha", "subagents", "logs"))
+	tempDirResolved, _ := filepath.EvalSymlinks(tempDir)
+	expectedDir := filepath.Join(tempDirResolved, ".iroha", "subagents", "logs")
 
 	if logsDir != expectedDir {
 		t.Errorf("expected logs dir %s, got %s", expectedDir, logsDir)
