@@ -283,3 +283,178 @@ func TestHookManager_Reload(t *testing.T) {
 		t.Error("expected non-empty after reload with config")
 	}
 }
+
+// ─── JSON Stdin Protocol ──────────────────────────────────────────────────
+
+func TestHookManager_JSONStdin(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "stdin_out.json")
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: "cat > " + outFile},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	hm.RunHooks(HookPreToolUse, HookContext{
+		ToolName:  "shell_run",
+		ToolInput: map[string]any{"command": "echo hello"},
+		SessionID: "session-123",
+	})
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("failed to read stdin output: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse stdin output JSON: %v", err)
+	}
+
+	if parsed["tool_name"] != "shell_run" {
+		t.Errorf("expected tool_name = 'shell_run', got %v", parsed["tool_name"])
+	}
+	if parsed["session_id"] != "session-123" {
+		t.Errorf("expected session_id = 'session-123', got %v", parsed["session_id"])
+	}
+	toolInput, ok := parsed["tool_input"].(map[string]any)
+	if !ok || toolInput["command"] != "echo hello" {
+		t.Errorf("expected tool_input command 'echo hello', got %v", parsed["tool_input"])
+	}
+}
+
+// ─── JSON Stdout: Allow / Deny Decisions ──────────────────────────────────
+
+func TestHookManager_JSONStdout_AllowDeny(t *testing.T) {
+	dir := t.TempDir()
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: `echo '{"decision":"deny","reason":"security policy violation"}'`},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	r1 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if !r1.Blocked {
+		t.Error("expected blocked due to JSON decision=deny")
+	}
+	if r1.BlockReason != "security policy violation" {
+		t.Errorf("expected block reason 'security policy violation', got %q", r1.BlockReason)
+	}
+
+	// Verify hookSpecificOutput deny
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: `echo '{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"blocked via hookSpecificOutput"}}'`},
+			},
+		},
+	})
+	hm.Reload()
+	r2 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if !r2.Blocked {
+		t.Error("expected blocked due to hookSpecificOutput decision=deny")
+	}
+	if r2.BlockReason != "blocked via hookSpecificOutput" {
+		t.Errorf("expected block reason 'blocked via hookSpecificOutput', got %q", r2.BlockReason)
+	}
+}
+
+// ─── JSON Stdout: Modifications & AdditionalContext ─────────────────────────
+
+func TestHookManager_JSONStdout_Modifications(t *testing.T) {
+	dir := t.TempDir()
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: `echo '{"hookSpecificOutput":{"permissionDecision":"allow","updatedInput":{"command":"npm test -- --coverage"},"additionalContext":"timeout is 5s"}}'`},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	r := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if r.Blocked {
+		t.Error("should not be blocked")
+	}
+	if r.AdditionalContext != "timeout is 5s" {
+		t.Errorf("expected additional context 'timeout is 5s', got %q", r.AdditionalContext)
+	}
+	updatedMap, ok := r.UpdatedInput.(map[string]any)
+	if !ok || updatedMap["command"] != "npm test -- --coverage" {
+		t.Errorf("expected updated input command 'npm test -- --coverage', got %v", r.UpdatedInput)
+	}
+}
+
+// ─── JSON Stdout: Exit Code Compatibility ─────────────────────────────────
+
+func TestHookManager_ExitCodeCompat(t *testing.T) {
+	dir := t.TempDir()
+	// Legacy: no JSON, exit 1 blocks, exit 2 injects
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: "exit 1"},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+	r1 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if !r1.Blocked {
+		t.Error("legacy exit 1 should block")
+	}
+
+	// Legacy exit 2 should inject (non-blocking)
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: "echo 'warning msg' >&2; exit 2"},
+			},
+		},
+	})
+	hm.Reload()
+	r2 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if r2.Blocked {
+		t.Error("legacy exit 2 should not block")
+	}
+	if len(r2.Messages) == 0 || r2.Messages[0] != "warning msg" {
+		t.Errorf("expected injected message 'warning msg', got %v", r2.Messages)
+	}
+
+	// Official spec with JSON: exit 2 blocks
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: `echo '{"message":"some msg"}'; exit 2`},
+			},
+		},
+	})
+	hm.Reload()
+	r3 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if !r3.Blocked {
+		t.Error("official spec JSON with exit code 2 should block")
+	}
+
+	// Official spec with JSON: exit 1 is non-blocking warning
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{Command: `echo '{"message":"json msg"}'; echo 'warning standard' >&2; exit 1`},
+			},
+		},
+	})
+	hm.Reload()
+	r4 := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+	if r4.Blocked {
+		t.Error("official spec JSON with exit code 1 should NOT block")
+	}
+	if len(r4.Messages) == 0 || !strings.Contains(r4.Messages[0], "json msg") {
+		t.Errorf("expected messages to contain 'json msg', got %v", r4.Messages)
+	}
+}
+

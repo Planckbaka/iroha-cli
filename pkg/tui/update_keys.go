@@ -57,7 +57,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 	// Handle permission select state FIRST
 	if m.State == statePermissionSelect {
-		permModes := []agent.PermissionMode{agent.ModePlan, agent.ModeDefault, agent.ModeAuto}
+		permModes := []agent.PermissionMode{agent.ModePlan, agent.ModeDefault, agent.ModeAcceptEdits, agent.ModeAuto, agent.ModeBypass}
 		switch msg.Type {
 		case tea.KeyUp:
 			if m.PermSelectIndex > 0 {
@@ -257,6 +257,47 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	}
 
 	switch msg.Type {
+
+	case tea.KeyShiftTab:
+		if m.State == statePrompt {
+			modes := []agent.PermissionMode{
+				agent.ModeDefault,
+				agent.ModeAcceptEdits,
+				agent.ModeAuto,
+				agent.ModePlan,
+				agent.ModeBypass,
+			}
+			current := agent.GlobalPermissionManager.GetMode()
+			nextIdx := 0
+			for i, mMode := range modes {
+				if mMode == current {
+					nextIdx = (i + 1) % len(modes)
+					break
+				}
+			}
+			nextMode := modes[nextIdx]
+			_ = agent.GlobalPermissionManager.SetMode(nextMode)
+
+			// Show status message in the chat history
+			var desc string
+			switch nextMode {
+			case agent.ModePlan:
+				desc = "(Read-only mode, blocks all write operations)"
+			case agent.ModeAuto:
+				desc = "(Read operations auto-approved, write operations still require authorization)"
+			case agent.ModeAcceptEdits:
+				desc = "(File edits auto-approved, shell commands require authorization)"
+			case agent.ModeBypass:
+				desc = "(YOLO mode, auto-approves all operations without prompts)"
+			default:
+				desc = "(Each sensitive operation not matching a rule requires authorization)"
+			}
+			statusLog := StyleToolSuccess.Render(fmt.Sprintf("Permission level cycled to: %s %s", nextMode, desc))
+			m.History = append(m.History, statusLog)
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		}
 
 	case tea.KeyCtrlY:
 		if m.LastRawResponse == "" {

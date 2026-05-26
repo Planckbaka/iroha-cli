@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -925,6 +927,21 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 		return nil, err
 	}
 
+	// Dynamic tool input rewrite from PreToolUse hook
+	if preResult.UpdatedInput != nil {
+		marshaled, err := json.Marshal(preResult.UpdatedInput)
+		if err == nil {
+			newArgsPtr := reflect.New(reflect.TypeOf(args))
+			if err := json.Unmarshal(marshaled, newArgsPtr.Interface()); err == nil {
+				args = newArgsPtr.Elem().Interface()
+				hookCtx.ToolInput = args
+				LogInfo(CatToolCall, "tool_args_rewritten", fmt.Sprintf("Tool %s arguments rewritten by PreToolUse hook", b.Name()), map[string]any{
+					"updated_args": args,
+				})
+			}
+		}
+	}
+
 	// ── Stage B: Execute the real tool ───────────────────────────────────
 	result, err := runnable.Run(ctx, args)
 	durationMS := time.Since(startTime).Milliseconds()
@@ -995,6 +1012,21 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 			result = make(map[string]any)
 		}
 		result["hook_notes"] = strings.Join(allMessages, "\n")
+	}
+
+	// Merge injected conversation contexts from pre + post hooks
+	var contextParts []string
+	if preResult.AdditionalContext != "" {
+		contextParts = append(contextParts, preResult.AdditionalContext)
+	}
+	if postResult.AdditionalContext != "" {
+		contextParts = append(contextParts, postResult.AdditionalContext)
+	}
+	if len(contextParts) > 0 {
+		if result == nil {
+			result = make(map[string]any)
+		}
+		result["additional_context"] = strings.Join(contextParts, "\n")
 	}
 
 	// Send tool end event to the bridge

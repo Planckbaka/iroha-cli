@@ -10,9 +10,11 @@ import (
 type PermissionMode string
 
 const (
-	ModeDefault PermissionMode = "default"
-	ModePlan    PermissionMode = "plan"
-	ModeAuto    PermissionMode = "auto"
+	ModeDefault     PermissionMode = "default"
+	ModePlan        PermissionMode = "plan"
+	ModeAuto        PermissionMode = "auto"
+	ModeAcceptEdits PermissionMode = "acceptEdits"
+	ModeBypass      PermissionMode = "bypassPermissions"
 )
 
 type PermissionRule struct {
@@ -124,7 +126,7 @@ var GlobalPermissionManager = NewPermissionManager(ModeDefault)
 func (pm *PermissionManager) SetMode(mode PermissionMode) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	if mode != ModeDefault && mode != ModePlan && mode != ModeAuto {
+	if mode != ModeDefault && mode != ModePlan && mode != ModeAuto && mode != ModeAcceptEdits && mode != ModeBypass {
 		return fmt.Errorf("invalid mode: %s", mode)
 	}
 	oldMode := pm.mode
@@ -238,6 +240,29 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 			"args": args,
 		})
 		return "deny", reason
+	}
+
+	if pm.mode == ModeBypass {
+		pm.consecutiveDenials = 0
+		reason := "Auto-approved by bypassPermissions mode"
+		LogAudit(CatSecurity, "mode_bypass_allow", reason, map[string]any{
+			"tool": toolName,
+			"args": args,
+		})
+		return "allow", reason
+	}
+
+	if pm.mode == ModeAcceptEdits {
+		isFileEdit := (toolName == "file_write" || toolName == "file_edit" || toolName == "file_delete")
+		if isFileEdit {
+			pm.consecutiveDenials = 0
+			reason := "Auto-approved by acceptEdits mode"
+			LogAudit(CatSecurity, "mode_accept_edits_allow", reason, map[string]any{
+				"tool": toolName,
+				"args": args,
+			})
+			return "allow", reason
+		}
 	}
 
 	// Phase 2: Auto mode uses 4-tier risk classifier

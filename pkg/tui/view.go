@@ -195,7 +195,6 @@ func RenderSlashMenu(items []SlashMenuItem, selectedIndex int, width int) string
 	return menuStyle.Render(sb.String())
 }
 
-// permModeNames is the ordered list for the permission selection screen
 var permModeNames = []struct {
 	Mode  agent.PermissionMode
 	Label string
@@ -204,7 +203,9 @@ var permModeNames = []struct {
 }{
 	{agent.ModePlan, "Plan Mode", "Read-only mode - blocks all write operations and Shell commands", ""},
 	{agent.ModeDefault, "Default Mode", "Every sensitive operation requires manual user approval (recommended)", ""},
-	{agent.ModeAuto, "Auto Mode", "Read operations auto-approved, write operations still require approval", ""},
+	{agent.ModeAcceptEdits, "AcceptEdits Mode", "File edits auto-approved, shell commands require authorization", ""},
+	{agent.ModeAuto, "Auto Mode", "Read and low-risk operations auto-approved, write operations still require approval", ""},
+	{agent.ModeBypass, "Bypass Mode", "YOLO mode - skips all confirmation prompts (dangerous)", ""},
 }
 
 // RenderPermissionSelectScreen renders the full-screen startup permission selection

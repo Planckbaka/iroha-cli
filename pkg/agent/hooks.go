@@ -79,12 +79,16 @@ type HookContext struct {
 
 // HookResult carries the aggregate outcome of running all hooks for an event.
 type HookResult struct {
-	// Blocked is true if any hook exited with code 1.
+	// Blocked is true if any hook exited with code 1/2 or returned 'deny' JSON.
 	Blocked bool
-	// BlockReason is the stderr content from the blocking hook.
+	// BlockReason is the stderr content or JSON reason from the blocking hook.
 	BlockReason string
-	// Messages collects stderr content from exit-2 (inject) hooks.
+	// Messages collects stderr content from exit-2 hooks or JSON messages.
 	Messages []string
+	// UpdatedInput contains rewritten tool arguments if returned by a hook.
+	UpdatedInput any
+	// AdditionalContext contains injected conversation context if returned by a hook.
+	AdditionalContext string
 }
 
 // HookManager loads hook definitions from external config files and executes
@@ -252,6 +256,16 @@ func (hm *HookManager) RunHooks(event HookEvent, ctx HookContext) HookResult {
 			return hr
 		}
 		result.Messages = append(result.Messages, hr.Messages...)
+		if hr.UpdatedInput != nil {
+			result.UpdatedInput = hr.UpdatedInput
+		}
+		if hr.AdditionalContext != "" {
+			if result.AdditionalContext != "" {
+				result.AdditionalContext += "\n" + hr.AdditionalContext
+			} else {
+				result.AdditionalContext = hr.AdditionalContext
+			}
+		}
 	}
 	return result
 }
@@ -318,6 +332,25 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 	cmd := exec.CommandContext(execCtx, "sh", "-c", def.Command)
 	cmd.Env = append(os.Environ(), extraEnv...)
 
+	// Populate Stdin JSON payload
+	var stdinBuf bytes.Buffer
+	stdinMap := map[string]any{
+		"tool_name":  ctx.ToolName,
+		"tool_input": ctx.ToolInput,
+		"session_id": ctx.SessionID,
+	}
+	if ctx.Prompt != "" {
+		stdinMap["prompt"] = ctx.Prompt
+	}
+	if ctx.ToolOutput != "" {
+		stdinMap["tool_output"] = ctx.ToolOutput
+	}
+	if ctx.ToolError != "" {
+		stdinMap["tool_error"] = ctx.ToolError
+	}
+	_ = json.NewEncoder(&stdinBuf).Encode(stdinMap)
+	cmd.Stdin = &stdinBuf
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -357,58 +390,153 @@ func (hm *HookManager) runOne(event HookEvent, def HookDef, ctx HookContext) Hoo
 		}
 	}
 
-	switch exitCode {
-	case 0:
-		LogInfo(CatSession, "hook_execute_success", "Hook executed successfully with exit code 0", map[string]any{
-			"event":       event,
-			"command":     def.Command,
-			"tool":        ctx.ToolName,
-			"duration_ms": durationMS,
-		})
-		return HookResult{}
+	// Try parsing stdout JSON if present
+	var stdoutJSON struct {
+		Decision      string         `json:"decision,omitempty"`
+		Reason        string         `json:"reason,omitempty"`
+		Message       string         `json:"message,omitempty"`
+		Modifications map[string]any `json:"modifications,omitempty"`
+		HookSpecificOutput *struct {
+			HookEventName            string         `json:"hookEventName,omitempty"`
+			PermissionDecision       string         `json:"permissionDecision,omitempty"`
+			PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
+			UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
+			AdditionalContext        string         `json:"additionalContext,omitempty"`
+		} `json:"hookSpecificOutput,omitempty"`
+	}
 
-	case 1:
-		// Block: stderr is the reason message
-		reason := strings.TrimSpace(stderr.String())
-		if reason == "" {
-			reason = "blocked by hook (no message)"
+	stdoutBytes := stdout.Bytes()
+	isJSON := false
+	if len(stdoutBytes) > 0 {
+		if unmarshalErr := json.Unmarshal(stdoutBytes, &stdoutJSON); unmarshalErr == nil {
+			isJSON = true
 		}
-		LogAudit(CatSecurity, "hook_execute_blocked", fmt.Sprintf("Hook blocked operation: %s", reason), map[string]any{
-			"event":       event,
-			"command":     def.Command,
-			"tool":        ctx.ToolName,
-			"reason":      reason,
-			"duration_ms": durationMS,
-		})
-		return HookResult{Blocked: true, BlockReason: reason}
+	}
 
-	case 2:
-		// Inject: stderr is appended as a message
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			LogInfo(CatSession, "hook_execute_injected", "Hook injected message into conversation", map[string]any{
-				"event":       event,
-				"command":     def.Command,
-				"tool":        ctx.ToolName,
-				"message":     msg,
-				"duration_ms": durationMS,
-			})
-			return HookResult{Messages: []string{msg}}
+	// ── Hook outcome evaluation ──
+	blocked := false
+	blockReason := ""
+	var messages []string
+	var updatedInput any
+	var additionalContext string
+
+	if isJSON {
+		// Evaluated via JSON protocol
+		decision := stdoutJSON.Decision
+		reason := stdoutJSON.Reason
+		if stdoutJSON.HookSpecificOutput != nil {
+			if stdoutJSON.HookSpecificOutput.PermissionDecision != "" {
+				decision = stdoutJSON.HookSpecificOutput.PermissionDecision
+			}
+			if stdoutJSON.HookSpecificOutput.PermissionDecisionReason != "" {
+				reason = stdoutJSON.HookSpecificOutput.PermissionDecisionReason
+			}
 		}
-		return HookResult{}
 
-	default:
-		// Unknown exit code — always fail-closed (unexpected crash)
-		LogWarn(CatSession, "hook_execute_unknown_code", fmt.Sprintf("Hook executed with unexpected exit code: %d", exitCode), map[string]any{
+		if decision == "deny" {
+			blocked = true
+			blockReason = reason
+			if blockReason == "" {
+				blockReason = "blocked by hook decision (deny)"
+			}
+		} else if decision == "allow" {
+			blocked = false
+		} else {
+			// Fallback to exit codes under JSON protocol
+			// Exit code 2 is standard block in Claude Code
+			if exitCode == 2 {
+				blocked = true
+				blockReason = reason
+				if blockReason == "" {
+					blockReason = strings.TrimSpace(stderr.String())
+				}
+				if blockReason == "" {
+					blockReason = "blocked by hook exit code 2"
+				}
+			} else if exitCode == 1 || exitCode == 3 {
+				// Exit code 1/3 is non-blocking error/warning
+				blocked = false
+				msg := strings.TrimSpace(stderr.String())
+				if msg != "" {
+					messages = []string{msg}
+				}
+			}
+		}
+
+		// Extracted parameters overrides
+		if stdoutJSON.HookSpecificOutput != nil && stdoutJSON.HookSpecificOutput.UpdatedInput != nil {
+			updatedInput = stdoutJSON.HookSpecificOutput.UpdatedInput
+		} else if stdoutJSON.Modifications != nil {
+			if toolInput, ok := stdoutJSON.Modifications["tool_input"]; ok {
+				updatedInput = toolInput
+			}
+		}
+
+		// Extracted context injection
+		if stdoutJSON.HookSpecificOutput != nil && stdoutJSON.HookSpecificOutput.AdditionalContext != "" {
+			additionalContext = stdoutJSON.HookSpecificOutput.AdditionalContext
+		}
+
+		// Extracted prompt/message
+		if stdoutJSON.Message != "" {
+			messages = append(messages, stdoutJSON.Message)
+		}
+
+	} else {
+		// Evaluated via legacy exit code protocol (exit 1 = block, exit 2 = inject)
+		switch exitCode {
+		case 0:
+			// continue silently
+		case 1:
+			blocked = true
+			blockReason = strings.TrimSpace(stderr.String())
+			if blockReason == "" {
+				blockReason = "blocked by hook (exit 1)"
+			}
+		case 2:
+			msg := strings.TrimSpace(stderr.String())
+			if msg != "" {
+				messages = []string{msg}
+			}
+		default:
+			// Treat unknown exit code as blocking error
+			blocked = true
+			blockReason = fmt.Sprintf("hook exited with unexpected code %d: %s", exitCode, strings.TrimSpace(stderr.String()))
+		}
+	}
+
+	if blocked {
+		LogAudit(CatSecurity, "hook_execute_blocked", fmt.Sprintf("Hook blocked operation: %s", blockReason), map[string]any{
 			"event":       event,
 			"command":     def.Command,
 			"tool":        ctx.ToolName,
-			"exit_code":   exitCode,
+			"reason":      blockReason,
 			"duration_ms": durationMS,
-			"stderr":      stderr.String(),
-			"stdout":      stdout.String(),
 		})
-		return HookResult{Blocked: true, BlockReason: fmt.Sprintf("hook exited with unexpected code %d: %s", exitCode, strings.TrimSpace(stderr.String()))}
+		return HookResult{Blocked: true, BlockReason: blockReason}
+	}
+
+	if len(messages) > 0 {
+		LogInfo(CatSession, "hook_execute_injected", "Hook injected messages/warnings", map[string]any{
+			"event":       event,
+			"command":     def.Command,
+			"tool":        ctx.ToolName,
+			"messages":    messages,
+			"duration_ms": durationMS,
+		})
+	} else {
+		LogInfo(CatSession, "hook_execute_success", "Hook executed successfully", map[string]any{
+			"event":       event,
+			"command":     def.Command,
+			"tool":        ctx.ToolName,
+			"duration_ms": durationMS,
+		})
+	}
+
+	return HookResult{
+		Messages:          messages,
+		UpdatedInput:      updatedInput,
+		AdditionalContext: additionalContext,
 	}
 }
 
