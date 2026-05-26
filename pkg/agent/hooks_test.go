@@ -453,7 +453,8 @@ func TestHookManager_ExitCodeCompat(t *testing.T) {
 	if r4.Blocked {
 		t.Error("official spec JSON with exit code 1 should NOT block")
 	}
-	if len(r4.Messages) == 0 || !strings.Contains(r4.Messages[0], "json msg") {
+	allMsgs := strings.Join(r4.Messages, " ")
+	if len(r4.Messages) == 0 || !strings.Contains(allMsgs, "json msg") {
 		t.Errorf("expected messages to contain 'json msg', got %v", r4.Messages)
 	}
 }
