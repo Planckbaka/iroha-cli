@@ -1,11 +1,20 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"iroha/pkg/llm"
+
+	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
@@ -250,5 +259,131 @@ func TestBlockingConfirmationTool_AskFlow(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("Expected nil result under denial, got %+v", res)
+	}
+}
+
+// Below are added tests for comprehensive runner and session simulation
+
+func TestCustomRunner_LifecycleAndSession(t *testing.T) {
+	tempHome, err := os.MkdirTemp("", "iroha-home-lifecycle-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempHome)
+
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempHome)
+	defer os.Setenv("HOME", oldHome)
+
+	cr, err := NewCustomRunner("openai", "gpt-4o", "sk-mock-key", "http://mock-api.com", llm.APIFormatOpenAI)
+	if err != nil {
+		t.Fatalf("failed to create custom runner: %v", err)
+	}
+	defer GlobalCronScheduler.Stop()
+
+	if cr.ModelName() != "gpt-4o" {
+		t.Errorf("expected model name 'gpt-4o', got %q", cr.ModelName())
+	}
+
+	if cr.GetTokenUsage() != 0 {
+		t.Errorf("expected token usage 0, got %d", cr.GetTokenUsage())
+	}
+
+	if GlobalSessionService == nil {
+		t.Fatal("expected GlobalSessionService to be initialized")
+	}
+
+	ctx := context.Background()
+	_, err = GlobalSessionService.Create(ctx, &session.CreateRequest{
+		AppName:   "iroha",
+		UserID:    "test-user",
+		SessionID: "sess-test-runner",
+	})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sessFile := filepath.Join(tempHome, ".iroha", "sessions", "sess-test-runner.json")
+	if _, err := os.Stat(sessFile); os.IsNotExist(err) {
+		t.Errorf("expected session file %s to be created", sessFile)
+	}
+}
+
+func TestCustomRunner_Execute(t *testing.T) {
+	tempHome, err := os.MkdirTemp("", "iroha-home-exec-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempHome)
+
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempHome)
+	defer os.Setenv("HOME", oldHome)
+
+	sseEvents := []string{
+		`data: {"choices":[{"delta":{"content":"Mocked execution response"}}]}`,
+		`data: [DONE]`,
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range sseEvents {
+			fmt.Fprintln(w, event)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	cr, err := NewCustomRunner("openai", "gpt-4o", "sk-mock-key", server.URL, llm.APIFormatOpenAI)
+	if err != nil {
+		t.Fatalf("failed to create custom runner: %v", err)
+	}
+	defer GlobalCronScheduler.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var events []*session.Event
+	var execErr error
+	doneChan := make(chan struct{})
+
+	cr.Execute(ctx, "test-user", "sess-runner-exec", "How are you?", func(ev *session.Event) {
+		events = append(events, ev)
+	}, func(err error) {
+		execErr = err
+	}, func() {
+		close(doneChan)
+	})
+
+	select {
+	case <-doneChan:
+	case <-time.After(4 * time.Second):
+		t.Fatal("Timeout waiting for runner execution done")
+	}
+
+	if execErr != nil {
+		t.Fatalf("unexpected runner error: %v", execErr)
+	}
+
+	if len(events) == 0 {
+		t.Error("expected runner events, got none")
+	}
+
+	metaList, err := GlobalSessionService.ListSavedSessions()
+	if err != nil {
+		t.Fatalf("failed to list saved sessions: %v", err)
+	}
+
+	var found bool
+	for _, m := range metaList {
+		if m.ID == "sess-runner-exec" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected session 'sess-runner-exec' to be persisted inside mock home directory")
 	}
 }
