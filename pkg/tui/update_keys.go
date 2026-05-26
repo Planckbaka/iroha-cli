@@ -258,7 +258,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 	}
-	
+
 	if m.State == statePrompt && msg.Type == tea.KeyCtrlG {
 		editor := os.Getenv("EDITOR")
 		if editor == "" {

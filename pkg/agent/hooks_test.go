@@ -1,12 +1,21 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"iter"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // writeHooksConfig writes a HookConfig to a temp file and returns its path.
@@ -505,3 +514,89 @@ func TestHookManager_AsyncHooks(t *testing.T) {
 	}
 }
 
+// ─── HTTP Hooks ───────────────────────────────────────────────────────────
+
+func TestHookManager_HTTP_Hook(t *testing.T) {
+	// 1. Create a mock HTTP server returning JSON decision
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"decision":"deny","reason":"blocked by mock http service"}`))
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{
+					Type: HookTypeHTTP,
+					URL:  ts.URL,
+				},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	result := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+
+	if !result.Blocked {
+		t.Error("expected HTTP hook to block")
+	}
+	if result.BlockReason != "blocked by mock http service" {
+		t.Errorf("expected block reason 'blocked by mock http service', got %q", result.BlockReason)
+	}
+}
+
+// ─── LLM Prompt Hooks ──────────────────────────────────────────────────────
+
+type mockLLM struct {
+	name   string
+	result string
+}
+
+func (m *mockLLM) Name() string { return m.name }
+func (m *mockLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: m.result},
+				},
+			},
+			TurnComplete: true,
+		}, nil)
+	}
+}
+
+func TestHookManager_LLMPrompt_Hook(t *testing.T) {
+	originalModel := globalLLMModel
+	defer func() { globalLLMModel = originalModel }()
+
+	// 1. Set global model mock
+	globalLLMModel = &mockLLM{
+		name:   "mock-reviewer",
+		result: `{"decision":"deny","reason":"blocked by mock reviewer prompt"}`,
+	}
+
+	dir := t.TempDir()
+	writeHooksConfig(t, dir, HookConfig{
+		Hooks: map[string][]HookDef{
+			"PreToolUse": {
+				{
+					Type:   HookTypePrompt,
+					Prompt: "Is this $TOOL_NAME execution safe?",
+				},
+			},
+		},
+	})
+	hm := newManagerFromDir(t, dir)
+
+	result := hm.RunHooks(HookPreToolUse, HookContext{ToolName: "shell_run"})
+
+	if !result.Blocked {
+		t.Error("expected LLM prompt hook to block")
+	}
+	if result.BlockReason != "blocked by mock reviewer prompt" {
+		t.Errorf("expected block reason 'blocked by mock reviewer prompt', got %q", result.BlockReason)
+	}
+}

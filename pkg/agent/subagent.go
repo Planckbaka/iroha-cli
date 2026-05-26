@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"iroha/pkg/llm"
@@ -35,10 +34,10 @@ const (
 
 // SubagentSpec holds the startup parameters for a subagent
 type SubagentSpec struct {
-	Name         string       `json:"name" description:"Unique subagent name (letters, numbers, underscores)"`
-	Type         SubagentType `json:"type" description:"Subagent type: explore, planner, reviewer, researcher, executor"`
-	Prompt       string       `json:"prompt" description:"Detailed instructions/tasks for the subagent"`
-	ModelName    string       `json:"model_name,omitempty" description:"Optional cheaper/faster model override"`
+	Name      string       `json:"name" description:"Unique subagent name (letters, numbers, underscores)"`
+	Type      SubagentType `json:"type" description:"Subagent type: explore, planner, reviewer, researcher, executor"`
+	Prompt    string       `json:"prompt" description:"Detailed instructions/tasks for the subagent"`
+	ModelName string       `json:"model_name,omitempty" description:"Optional cheaper/faster model override"`
 }
 
 // SubagentResult represents the structured completion result returned to the parent
@@ -52,9 +51,7 @@ type SubagentResult struct {
 }
 
 // SubagentManager manages synchronous subagent execution
-type SubagentManager struct {
-	mu sync.RWMutex
-}
+type SubagentManager struct{}
 
 // GlobalSubagentManager is the singleton subagent manager
 var GlobalSubagentManager = &SubagentManager{}
