@@ -206,11 +206,9 @@ type CustomRunner struct {
 	GenkitRegistry  *genkit.Genkit
 }
 
-func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
-	// 1. Initialize Google Genkit Go SDK Registry & Plugins based on active provider
-	// Only initialize Genkit for providers that use the Genkit adapter (Gemini, Claude).
-	// OpenAI-compatible providers use the direct adapter and don't need Genkit.
-	var g *genkit.Genkit
+// initGenkit creates a Genkit registry with the appropriate provider plugin.
+// Returns nil for providers that use the direct adapter (e.g. OpenAI-compatible).
+func initGenkit(provider llm.ProviderType, apiKey, baseURL string) *genkit.Genkit {
 	switch provider {
 	case llm.ProviderGemini, llm.ProviderClaude:
 		ctx := context.Background()
@@ -221,8 +219,14 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		case llm.ProviderClaude:
 			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
 		}
-		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
+		return genkit.Init(ctx, genkit.WithPlugins(plugins...))
 	}
+	return nil
+}
+
+func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string, baseURL string, apiFormat llm.APIFormat) (*CustomRunner, error) {
+	// 1. Initialize Genkit registry (nil for OpenAI-compatible providers)
+	g := initGenkit(provider, apiKey, baseURL)
 
 	// 2. Create our abstract model adapter
 	systemPrompt := buildSystemPrompt()
@@ -342,19 +346,7 @@ func (cr *CustomRunner) SwitchModel(provider llm.ProviderType, modelName string,
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 
-	var g *genkit.Genkit
-	switch provider {
-	case llm.ProviderGemini, llm.ProviderClaude:
-		ctx := context.Background()
-		var plugins []api.Plugin
-		switch provider {
-		case llm.ProviderGemini:
-			plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-		case llm.ProviderClaude:
-			plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey, BaseURL: baseURL})
-		}
-		g = genkit.Init(ctx, genkit.WithPlugins(plugins...))
-	}
+	g := initGenkit(provider, apiKey, baseURL)
 
 	systemPrompt := buildSystemPrompt()
 	newAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
