@@ -250,6 +250,7 @@ func (mm *MemoryManager) Save(name, description string, memType MemoryType, cont
 	mm.mu.Unlock()
 
 	mm.rebuildIndex(saveDir)
+	_ = syncToAgentsMD(entry, false)
 
 	LogAudit(CatSession, "memory_save", fmt.Sprintf("Memory entry '%s' (%s) saved successfully", name, memType), map[string]any{
 		"name":        name,
@@ -569,6 +570,7 @@ func (mm *MemoryManager) Update(name, description string, memType MemoryType, co
 	mm.mu.Unlock()
 
 	mm.rebuildIndex(saveDir)
+	_ = syncToAgentsMD(entry, false)
 
 	LogAudit(CatSession, "memory_update", fmt.Sprintf("Memory entry '%s' (%s) updated successfully", name, memType), map[string]any{
 		"name":        name,
@@ -607,6 +609,7 @@ func (mm *MemoryManager) Delete(name string) error {
 	if deletedDir != "" {
 		mm.rebuildIndex(deletedDir)
 	}
+	_ = syncToAgentsMD(existing, true)
 
 	LogAudit(CatSession, "memory_delete", fmt.Sprintf("Memory entry '%s' deleted", name), map[string]any{
 		"name": name,
@@ -623,4 +626,147 @@ func projectMemoryDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(cwd, ".iroha", "memory"), nil
+}
+
+type agentsBlock struct {
+	name       string
+	headerLine string
+	bodyLines  []string
+}
+
+func syncToAgentsMD(entry *MemoryEntry, isDelete bool) error {
+	agentsPath := "AGENTS.md"
+
+	// Read AGENTS.md
+	data, err := os.ReadFile(agentsPath)
+	var content string
+	if err != nil {
+		if os.IsNotExist(err) {
+			content = "# Project Agents Configuration\n\n"
+		} else {
+			return err
+		}
+	} else {
+		content = string(data)
+	}
+
+	const sectionTitle = "## Agent Dynamic Learnings"
+
+	// Find or create the ## Agent Dynamic Learnings section
+	var beforeSection, afterSection string
+	idx := strings.Index(content, sectionTitle)
+	if idx == -1 {
+		if !strings.HasSuffix(content, "\n\n") {
+			if strings.HasSuffix(content, "\n") {
+				content += "\n"
+			} else {
+				content += "\n\n"
+			}
+		}
+		content += sectionTitle + "\n\n"
+		beforeSection = content
+		afterSection = ""
+	} else {
+		beforeSection = content[:idx+len(sectionTitle)]
+		afterSection = content[idx+len(sectionTitle):]
+	}
+
+	// Parse blocks from afterSection
+	lines := strings.Split(afterSection, "\n")
+	var newSectionLines []string
+	var blocks []agentsBlock
+	var currentBlock *agentsBlock
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- **") && strings.Contains(trimmed, "** (") {
+			if currentBlock != nil {
+				blocks = append(blocks, *currentBlock)
+			}
+			nameEnd := strings.Index(trimmed[4:], "**")
+			var name string
+			if nameEnd != -1 {
+				name = trimmed[4 : 4+nameEnd]
+			}
+			currentBlock = &agentsBlock{
+				name:       name,
+				headerLine: line,
+			}
+		} else if currentBlock != nil && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t") || line == "") {
+			currentBlock.bodyLines = append(currentBlock.bodyLines, line)
+		} else {
+			if currentBlock != nil {
+				blocks = append(blocks, *currentBlock)
+				currentBlock = nil
+			}
+			newSectionLines = append(newSectionLines, line)
+		}
+	}
+	if currentBlock != nil {
+		blocks = append(blocks, *currentBlock)
+	}
+
+	// Update or delete blocks
+	found := false
+	var updatedBlocks []agentsBlock
+	for _, b := range blocks {
+		if b.name == entry.Name {
+			found = true
+			if !isDelete {
+				updatedBlocks = append(updatedBlocks, makeAgentsBlock(entry))
+			}
+		} else {
+			updatedBlocks = append(updatedBlocks, b)
+		}
+	}
+	if !found && !isDelete {
+		updatedBlocks = append(updatedBlocks, makeAgentsBlock(entry))
+	}
+
+	// Reconstruct the section
+	var sb strings.Builder
+	for _, b := range updatedBlocks {
+		sb.WriteString(b.headerLine + "\n")
+		for _, bl := range b.bodyLines {
+			sb.WriteString(bl + "\n")
+		}
+	}
+
+	nonEmptyFound := false
+	var trailingLines []string
+	for i := len(newSectionLines) - 1; i >= 0; i-- {
+		l := newSectionLines[i]
+		if strings.TrimSpace(l) != "" {
+			nonEmptyFound = true
+		}
+		if nonEmptyFound {
+			trailingLines = append([]string{l}, trailingLines...)
+		}
+	}
+	for _, tl := range trailingLines {
+		sb.WriteString(tl + "\n")
+	}
+
+	finalContent := beforeSection + "\n" + sb.String()
+	reConsecutiveNewlines := regexp.MustCompile(`\n{3,}`)
+	finalContent = reConsecutiveNewlines.ReplaceAllString(finalContent, "\n\n")
+
+	return os.WriteFile(agentsPath, []byte(finalContent), 0644)
+}
+
+func makeAgentsBlock(entry *MemoryEntry) agentsBlock {
+	header := fmt.Sprintf("- **%s** (%s): %s", entry.Name, entry.Type, entry.Description)
+	contentLines := strings.Split(entry.Content, "\n")
+	var body []string
+	if len(contentLines) > 0 && strings.TrimSpace(entry.Content) != "" {
+		body = append(body, "  - *Content*:")
+		for _, cl := range contentLines {
+			body = append(body, "    "+cl)
+		}
+	}
+	return agentsBlock{
+		name:       entry.Name,
+		headerLine: header,
+		bodyLines:  body,
+	}
 }

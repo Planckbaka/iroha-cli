@@ -910,6 +910,11 @@ Please explain in 1-2 simple, professional sentences why this tool call is neces
 		return result, err
 	}
 
+	if approved == "bypass" {
+		LogToolTrace(b.Name(), args, "bypassed", time.Since(toolStartTime).Milliseconds())
+		return map[string]any{"success": true, "message": "Bypassed by user interactive decision"}, nil
+	}
+
 	if approved == "y" {
 		GlobalPermissionManager.NoteApproval()
 		time.Sleep(200 * time.Millisecond) // Smooth animation transition

@@ -1141,3 +1141,61 @@ func RenderHelpDashboard() string {
 
 	return cardStyle.Render(sb.String()) + "\n"
 }
+
+// RenderFrustrationPauseCard renders the diagnostic card shown when the agent gets stuck in a loop
+func RenderFrustrationPauseCard(toolName string, args any, errMsg string, selectedIndex int) string {
+	var sb strings.Builder
+
+	// Header
+	sb.WriteString(lipgloss.NewStyle().
+		Foreground(ColorDanger).Bold(true).
+		Render("⚠️  Frustration Loop Detected (Agent Paused)") + "\n\n")
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("The agent has repeatedly attempted this exact action 3 times consecutively and failed. Please intervene:") + "\n\n")
+
+	// Failing action details
+	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Render("Action: ") + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(toolName) + "\n")
+	
+	argsStr := FormatToolArgs(args)
+	if argsStr != "" {
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Render("Arguments: ") + lipgloss.NewStyle().Foreground(ColorTextMuted).Render(argsStr) + "\n")
+	}
+
+	if errMsg != "" {
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Render("Error: ") + lipgloss.NewStyle().Foreground(ColorDanger).Render(errMsg) + "\n")
+	}
+	sb.WriteString("\n")
+
+	// Options
+	opt0 := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorPrimary)
+	opt1 := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorSuccess)
+	opt2 := lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(ColorWarning)
+
+	if selectedIndex == 0 {
+		opt0 = opt0.Background(ColorPrimary).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 1 {
+		opt1 = opt1.Background(ColorSuccess).Foreground(lipgloss.Color("#18181B"))
+	} else if selectedIndex == 2 {
+		opt2 = opt2.Background(ColorWarning).Foreground(lipgloss.Color("#18181B"))
+	}
+
+	sb.WriteString("  ")
+	sb.WriteString(opt0.Render("Edit Args"))
+	sb.WriteString("  ")
+	sb.WriteString(opt1.Render("Bypass Step"))
+	sb.WriteString("  ")
+	sb.WriteString(opt2.Render("Prompt & Retry"))
+
+	sb.WriteString("\n\n")
+	sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true).
+		Render("← → / Tab Select   Enter Confirm"))
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(ColorDanger).
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	return boxStyle.Render(sb.String())
+}

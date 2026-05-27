@@ -89,6 +89,93 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
+	// Handle frustration pause state
+	if m.State == stateFrustrationPause {
+		if m.ConfirmEditActive {
+			switch msg.Type {
+			case tea.KeyEnter:
+				editedVal := m.TextArea.Value()
+				m.ConfirmEditActive = false
+				m.TextArea.SetValue("")
+				m.TextArea.Blur()
+				m = m.transitionTo(stateThinking)
+				
+				if m.FrustrationSelectIndex == 0 {
+					// Submit edited args
+					agent.Bridge.ResponseChan <- "edit:" + editedVal
+				} else if m.FrustrationSelectIndex == 2 {
+					// Submit prompt & retry: send "deny" with custom warning prompt as message
+					agent.Bridge.ResponseChan <- "edit:Failed. Please note instructions from developer: " + editedVal
+				}
+				m.ConfirmationListenerActive = true
+				return m, m.listenToConfirmationBridge(), true
+			case tea.KeyEscape:
+				m.ConfirmEditActive = false
+				m.TextArea.SetValue("")
+				m.TextArea.Blur()
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			default:
+				// Pass to textarea
+				var taCmd tea.Cmd
+				m.TextArea, taCmd = m.TextArea.Update(msg)
+				return m, taCmd, true
+			}
+		}
+
+		switch msg.Type {
+		case tea.KeyLeft, tea.KeyTab:
+			m.FrustrationSelectIndex = (m.FrustrationSelectIndex - 1 + 3) % 3
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		case tea.KeyRight, tea.KeyShiftTab:
+			m.FrustrationSelectIndex = (m.FrustrationSelectIndex + 1) % 3
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		case tea.KeyEnter:
+			// Execute the selected action
+			switch m.FrustrationSelectIndex {
+			case 0:
+				// [Edit Args] - focus textarea so user can edit the arguments JSON
+				m.ConfirmEditActive = true
+				m.TextArea.Focus()
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			case 1:
+				// [Bypass Step] - transition to thinking and send bypass to ResponseChan
+				m = m.transitionTo(stateThinking)
+				m.TextArea.SetValue("")
+				m.TextArea.Blur()
+				agent.Bridge.ResponseChan <- "bypass"
+				m.ConfirmationListenerActive = true
+				return m, m.listenToConfirmationBridge(), true
+			case 2:
+				// [Prompt & Retry] - focus textarea so user can type a guiding prompt
+				m.ConfirmEditActive = true
+				m.TextArea.SetValue("") // Clear textarea so user can type prompt
+				m.TextArea.Placeholder = "Type a guiding prompt for the agent (e.g. 'Use yarn instead')..."
+				m.TextArea.Focus()
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, nil, true
+			}
+		case tea.KeyEscape:
+			// Return to default selection
+			m.ConfirmEditActive = false
+			m.TextArea.SetValue("")
+			m.TextArea.Blur()
+			m.Viewport.SetContent(m.renderViewportContent())
+			m.Viewport.GotoBottom()
+			return m, nil, true
+		}
+
+		return m, nil, true
+	}
+
 	// Handle session selection state
 	if m.State == stateSessionSelect {
 		switch msg.Type {
@@ -1124,6 +1211,44 @@ func (m Model) handleSlashCommand(inputVal string) (Model, tea.Cmd, bool) {
 		}
 		m.History = append(m.History, userLog, replyLog)
 		return m, nil, true
+	}
+
+	if cmdName == "/goal" {
+		m.HistoryManager.Add(inputVal)
+		userLog := StyleUserMsg.Render("> " + inputVal)
+		m.TextArea.SetValue("")
+		m.TextArea.SetHeight(2)
+
+		if len(parts) < 2 {
+			replyLog := StyleToolError.Render("[error] Please specify a goal description: /goal <task description>")
+			m.History = append(m.History, userLog, replyLog)
+			return m, nil, true
+		}
+
+		goalText := strings.Join(parts[1:], " ")
+		m.IsGoalMode = true
+		m.GoalText = goalText
+
+		m.CurrentPrompt = fmt.Sprintf("Goal: %s\nPlease construct a task plan using `task_create`, execute tasks one-by-one, and use `task_update` to mark tasks as completed as you work.", goalText)
+		m.StreamedText = ""
+		m = m.transitionTo(stateThinking)
+
+		m.RoundCount++
+		m.RoundStartTime = time.Now()
+		m.ActiveTool = agent.ToolStatus{}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.Ctx = ctx
+		m.Cancel = cancel
+
+		m.Runner.Execute(m.Ctx, "user-dev", m.SessionID, m.CurrentPrompt,
+			m.OnEvent, m.OnError, m.OnDone,
+		)
+		
+		startLog := StyleToolSuccess.Render(fmt.Sprintf("Autonomous goal loop started: %s", goalText))
+		m.History = append(m.History, userLog, startLog)
+
+		return m, m.Spinner.Tick, true
 	}
 
 	return m, nil, false

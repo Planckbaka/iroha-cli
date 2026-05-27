@@ -31,6 +31,7 @@ const (
 	stateConfirming
 	statePermissionSelect
 	stateSessionSelect
+	stateFrustrationPause
 )
 
 func (s TuiState) String() string {
@@ -47,6 +48,8 @@ func (s TuiState) String() string {
 		return "PermissionSelect"
 	case stateSessionSelect:
 		return "SessionSelect"
+	case stateFrustrationPause:
+		return "FrustrationPause"
 	default:
 		return "Unknown"
 	}
@@ -106,6 +109,7 @@ type SlashMenuItem struct {
 
 // AllSlashCommands is the master list of all supported slash commands
 var AllSlashCommands = []SlashMenuItem{
+	{"/goal", "Run a long-running autonomous task execution loop with DAG planning"},
 	{"/permission", "Select or switch permission level (plan | auto | default)"},
 	{"/rules", "View current permission rules list"},
 	{"/hooks", "View or hot-reload Hook configuration (reload)"},
@@ -218,6 +222,13 @@ type Model struct {
 	// Premium interactive Edit fields during confirmation
 	ConfirmEditActive bool
 	ConfirmEditText   string
+
+	// Frustration & Goal tracking
+	ToolHistory            []ToolCallRecord
+	FrustrationTool        agent.ToolStatus
+	FrustrationSelectIndex int // 0: Edit Args, 1: Bypass Step, 2: Prompt & Retry
+	IsGoalMode             bool
+	GoalText               string
 }
 
 func SetupTextArea() textarea.Model {
@@ -504,6 +515,27 @@ func (m *Model) renderIncremental() {
 }
 
 func (m *Model) renderViewportContent() string {
+	// If in frustration pause state:
+	if m.State == stateFrustrationPause {
+		if m.ConfirmEditActive {
+			var sb strings.Builder
+			sb.WriteString(lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("Editing Interactive Input") + "\n\n")
+			if m.FrustrationSelectIndex == 0 {
+				sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("Modify the tool arguments in the input area at the bottom:") + "\n\n")
+			} else {
+				sb.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("Type your prompt/instruction for the agent at the bottom:") + "\n\n")
+			}
+			sb.WriteString("  Press " + lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("Enter") + " to submit and resume.\n")
+			sb.WriteString("  Press " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("Esc") + " to cancel.\n\n")
+			return sb.String()
+		}
+		var errMsg string
+		if m.FrustrationTool.Error != nil {
+			errMsg = m.FrustrationTool.Error.Error()
+		}
+		return RenderFrustrationPauseCard(m.FrustrationTool.Name, m.FrustrationTool.Args, errMsg, m.FrustrationSelectIndex)
+	}
+
 	// If interactive Edit is active, render editing instructions in the viewport
 	if m.State == stateConfirming && m.ConfirmEditActive {
 		var sb strings.Builder
@@ -847,4 +879,24 @@ func (m Model) getEditableValue() string {
 		}
 	}
 	return ""
+}
+
+type ToolCallRecord struct {
+	Name      string
+	ArgsJSON  string
+	Timestamp time.Time
+	Success   bool
+	Error     error
+}
+
+func (m *Model) detectFrustration() bool {
+	if len(m.ToolHistory) < 3 {
+		return false
+	}
+	h1 := m.ToolHistory[len(m.ToolHistory)-1]
+	h2 := m.ToolHistory[len(m.ToolHistory)-2]
+	h3 := m.ToolHistory[len(m.ToolHistory)-3]
+
+	return h1.Name == h2.Name && h2.Name == h3.Name &&
+		h1.ArgsJSON == h2.ArgsJSON && h2.ArgsJSON == h3.ArgsJSON
 }

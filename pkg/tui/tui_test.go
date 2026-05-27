@@ -395,3 +395,64 @@ func TestStatsSlashCommand(t *testing.T) {
 		t.Errorf("expected History to contain telemetry details, got:\n%s", lastLog)
 	}
 }
+
+func TestTUI_GoalAndFrustration(t *testing.T) {
+	// 1. Goal Command test
+	m := NewModel(nil, "test-session", false, "auto", "")
+	m.State = statePrompt
+	m.TextArea.SetValue("/goal Create a backend server")
+
+	res, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM := res.(Model)
+
+	if !newM.IsGoalMode {
+		t.Error("expected IsGoalMode to be true after /goal")
+	}
+	if newM.GoalText != "Create a backend server" {
+		t.Errorf("expected GoalText 'Create a backend server', got '%s'", newM.GoalText)
+	}
+
+	// 2. Frustration loop detection test
+	m2 := NewModel(nil, "test-session", false, "auto", "")
+	m2.State = stateThinking
+
+	// Send 3 consecutive identical tool call records
+	for i := 0; i < 3; i++ {
+		// Start
+		res, _ = m2.Update(ToolStatusMsg{
+			Status: agent.ToolStatus{
+				Name:    "shell_run",
+				Args:    map[string]any{"command": "npm install"},
+				Running: true,
+			},
+		})
+		m2 = res.(Model)
+
+		// End
+		res, _ = m2.Update(ToolStatusMsg{
+			Status: agent.ToolStatus{
+				Name:    "shell_run",
+				Args:    map[string]any{"command": "npm install"},
+				Running: false,
+				Success: false,
+				Error:   errors.New("connection timeout"),
+			},
+		})
+		m2 = res.(Model)
+	}
+
+	if m2.State != stateFrustrationPause {
+		t.Errorf("expected state stateFrustrationPause after 3 identical failing tool calls, got %s", m2.State.String())
+	}
+
+	if m2.FrustrationSelectIndex != 0 {
+		t.Errorf("expected default select index 0, got %d", m2.FrustrationSelectIndex)
+	}
+
+	// 3. Navigation inside frustration pause state
+	res, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m2 = res.(Model)
+	if m2.FrustrationSelectIndex != 1 {
+		t.Errorf("expected frustration index 1 after KeyRight, got %d", m2.FrustrationSelectIndex)
+	}
+}

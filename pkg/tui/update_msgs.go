@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -103,6 +104,29 @@ func (m Model) handleCustomMsg(msg tea.Msg) (Model, tea.Cmd, bool) {
 			m.StreamedText += logLine
 			if !m.RoundStartTime.IsZero() {
 				m.LastRoundDuration = time.Since(m.RoundStartTime)
+			}
+
+			// Record tool call to history
+			argsBytes, _ := json.Marshal(status.Args)
+			m.ToolHistory = append(m.ToolHistory, ToolCallRecord{
+				Name:      status.Name,
+				ArgsJSON:  string(argsBytes),
+				Timestamp: time.Now(),
+				Success:   status.Success,
+				Error:     status.Error,
+			})
+
+			// Check for frustration loop
+			if m.detectFrustration() {
+				m = m.transitionTo(stateFrustrationPause)
+				m.FrustrationTool = status
+				m.FrustrationSelectIndex = 0
+				m.TextArea.SetValue(string(argsBytes))
+				m.TextArea.Focus()
+				
+				m.Viewport.SetContent(m.renderViewportContent())
+				m.Viewport.GotoBottom()
+				return m, m.listenToToolBridge(), true
 			}
 		}
 		m.Viewport.SetContent(m.renderViewportContent())

@@ -269,3 +269,65 @@ func TestMemoryManager_BuildSystemPromptSection_Filtering(t *testing.T) {
 		t.Error("expected unmatched prefer_pnpm to be filtered out")
 	}
 }
+
+func TestMemoryManager_SyncToAgentsMD(t *testing.T) {
+	dir := t.TempDir()
+	mm := newMemoryManagerInDir(t, dir)
+
+	// Case 1: Saving a memory should create AGENTS.md and populate ## Agent Dynamic Learnings
+	err := mm.Save("prefer_pnpm", "User prefers pnpm", MemTypeUser, "Always use pnpm.")
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	data, err := os.ReadFile("AGENTS.md")
+	if err != nil {
+		t.Fatalf("AGENTS.md should be created: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "## Agent Dynamic Learnings") {
+		t.Error("AGENTS.md should contain the dynamic learnings section header")
+	}
+	if !strings.Contains(content, "- **prefer_pnpm** (user): User prefers pnpm") {
+		t.Error("AGENTS.md should contain the saved entry name, type, and description")
+	}
+	if !strings.Contains(content, "Always use pnpm.") {
+		t.Error("AGENTS.md should contain the entry content")
+	}
+
+	// Case 2: Updating the memory should replace it under ## Agent Dynamic Learnings
+	err = mm.Update("prefer_pnpm", "User strongly prefers pnpm", MemTypeUser, "Use pnpm for everything.")
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	data2, err := os.ReadFile("AGENTS.md")
+	if err != nil {
+		t.Fatalf("Failed to read updated AGENTS.md: %v", err)
+	}
+	content2 := string(data2)
+	if strings.Contains(content2, "User prefers pnpm") {
+		t.Error("AGENTS.md should not contain the old description after update")
+	}
+	if !strings.Contains(content2, "- **prefer_pnpm** (user): User strongly prefers pnpm") {
+		t.Error("AGENTS.md should contain the updated description")
+	}
+	if !strings.Contains(content2, "Use pnpm for everything.") {
+		t.Error("AGENTS.md should contain the updated content")
+	}
+
+	// Case 3: Deleting the memory should remove it from AGENTS.md
+	err = mm.Delete("prefer_pnpm")
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	data3, err := os.ReadFile("AGENTS.md")
+	if err != nil {
+		t.Fatalf("Failed to read AGENTS.md after delete: %v", err)
+	}
+	content3 := string(data3)
+	if strings.Contains(content3, "prefer_pnpm") {
+		t.Error("AGENTS.md should not contain deleted memory 'prefer_pnpm'")
+	}
+}
