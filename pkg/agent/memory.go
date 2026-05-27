@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // MemoryType classifies what kind of durable fact a memory entry represents.
@@ -1167,6 +1172,11 @@ func (dc *DreamConsolidator) Consolidate(mm *MemoryManager, force bool) ([]strin
 		}
 	}
 
+	// LLM-assisted Semantic Consolidation
+	if globalLLMModel != nil {
+		unique = dc.ConsolidateSemantically(mm, unique)
+	}
+
 	// Phase 4: Prune (Enforce maximum memory entries cap)
 	completedPhases = append(completedPhases, "Phase 4: Prune - enforce max memory entries and rebuild index")
 
@@ -1189,5 +1199,124 @@ func (dc *DreamConsolidator) Consolidate(mm *MemoryManager, force bool) ([]strin
 	mm.Reload()
 	dc.LastConsolidation = time.Now()
 	return completedPhases, nil
+}
+
+// ConsolidateSemantically clusters and merges memories of the same type using the active LLM.
+func (dc *DreamConsolidator) ConsolidateSemantically(mm *MemoryManager, entries []*MemoryEntry) []*MemoryEntry {
+	if globalLLMModel == nil {
+		return entries
+	}
+
+	// Group entries by type
+	byType := make(map[MemoryType][]*MemoryEntry)
+	for _, e := range entries {
+		byType[e.Type] = append(byType[e.Type], e)
+	}
+
+	var consolidated []*MemoryEntry
+
+	for mType, list := range byType {
+		// Only run semantic merging if there are 3 or more entries of this type to keep it optimized
+		if len(list) < 3 {
+			consolidated = append(consolidated, list...)
+			continue
+		}
+
+		LogAudit(CatSession, "memory_consolidate_semantic_start", fmt.Sprintf("Running semantic merging for %d memories of type %s", len(list), mType), nil)
+
+		// Build consolidation prompt
+		var builder strings.Builder
+		for _, e := range list {
+			builder.WriteString(fmt.Sprintf("- **%s**: %s\n  *Content*: %s\n\n", e.Name, e.Description, e.Content))
+		}
+
+		systemPrompt := fmt.Sprintf(`You are the persistent memory consolidation engine for Antigravity (a professional agent CLI).
+Your task is to review a list of memories of type '%s' and merge any duplicate, redundant, or closely related guidelines into a single highly dense, compact representation.
+You must output a valid JSON array of consolidated memory objects in EXACTLY this format:
+[
+  {
+    "name": "durable_slug_name",
+    "description": "Short description of the preference",
+    "content": "Full, complete body of the preference. Do not use placeholders."
+  }
+]
+Do not output any introductory or concluding text, and do not wrap in markdown blocks. Output only raw JSON.`, mType)
+
+		req := &model.LLMRequest{
+			Contents: []*genai.Content{
+				{
+					Role: "user",
+					Parts: []*genai.Part{
+						{Text: systemPrompt + "\n\n[MEMORIES TO CONSOLIDATE]:\n" + builder.String()},
+					},
+				},
+			},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var responseBuilder strings.Builder
+		events := globalLLMModel.GenerateContent(ctx, req, false)
+		for resp, err := range events {
+			if err == nil && resp != nil && resp.Content != nil {
+				for _, part := range resp.Content.Parts {
+					if part.Text != "" {
+						responseBuilder.WriteString(part.Text)
+					}
+				}
+			}
+		}
+		cancel()
+
+		responseText := strings.TrimSpace(responseBuilder.String())
+		// Clean up markdown markers if the LLM returned them
+		if strings.HasPrefix(responseText, "```") {
+			lines := strings.Split(responseText, "\n")
+			var clean []string
+			for _, line := range lines {
+				if !strings.HasPrefix(line, "```") {
+					clean = append(clean, line)
+				}
+			}
+			responseText = strings.Join(clean, "\n")
+		}
+		responseText = strings.TrimSpace(responseText)
+
+		type SemanticItem struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Content     string `json:"content"`
+		}
+
+		var items []SemanticItem
+		if err := json.Unmarshal([]byte(responseText), &items); err == nil && len(items) > 0 {
+			// Delete the old entries from disk so they don't leak
+			for _, e := range list {
+				_ = mm.Delete(e.Name)
+			}
+			// Save the consolidated new entries
+			for _, item := range items {
+				slug := slugify(item.Name)
+				if slug != "" && strings.TrimSpace(item.Content) != "" {
+					_ = mm.Save(slug, item.Description, mType, item.Content)
+					// Retrieve the saved entry to include in consolidated list
+					mm.mu.RLock()
+					if saved, ok := mm.entries[slug]; ok {
+						consolidated = append(consolidated, saved)
+					}
+					mm.mu.RUnlock()
+				}
+			}
+			LogAudit(CatSession, "memory_consolidate_semantic_success", fmt.Sprintf("Successfully consolidated %d entries down to %d", len(list), len(items)), nil)
+		} else {
+			// Fallback: keep original list intact
+			consolidated = append(consolidated, list...)
+			LogInfo(CatSession, "memory_consolidate_semantic_fallback", "Semantic consolidation failed or returned invalid JSON; falling back to original list", map[string]any{
+				"error":    fmt.Sprintf("%v", err),
+				"response": responseText,
+			})
+		}
+	}
+
+	return consolidated
 }
 

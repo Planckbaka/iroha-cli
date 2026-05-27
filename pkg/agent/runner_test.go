@@ -387,3 +387,59 @@ func TestCustomRunner_Execute(t *testing.T) {
 		t.Errorf("expected session 'sess-runner-exec' to be persisted inside mock home directory")
 	}
 }
+
+func TestSelfHealingPostEditHook(t *testing.T) {
+	// 1. Create a broken Go file in the pkg/agent directory to force a compile failure
+	brokenFile := "broken.go"
+	brokenContent := `package agent
+	
+	// This is broken syntax that won't compile
+	func BrokenGoFunction() {
+		invalid_token_here!!!
+	}`
+	
+	if err := os.WriteFile(brokenFile, []byte(brokenContent), 0644); err != nil {
+		t.Fatalf("failed to write broken file: %v", err)
+	}
+	defer os.Remove(brokenFile) // Clean up immediately upon test exit
+
+	// 2. Mock a file modification tool call to trigger the compiler check
+	rawTool := &mockTool{name: "file_edit"}
+	toolWrapper := &blockingConfirmationTool{Tool: rawTool}
+
+	// Make sure we are in default mode (to bypass Plan mode denials)
+	originalMode := GlobalPermissionManager.GetMode()
+	GlobalPermissionManager.SetMode(ModeDefault)
+	defer GlobalPermissionManager.SetMode(originalMode)
+
+	// Since toolWrapper.Run uses the global confirmation bridge, we approve it automatically
+	Bridge.Reset()
+	go func() {
+		select {
+		case <-Bridge.PromptChan:
+			// Approve the tool execution
+			Bridge.ResponseChan <- "y"
+		case <-time.After(200 * time.Millisecond):
+		}
+	}()
+
+	// Run the wrapper tool
+	res, err := toolWrapper.Run(nil, map[string]any{"path": "pkg/agent/broken.go"})
+	if err != nil {
+		t.Fatalf("unexpected wrapper execution error: %v", err)
+	}
+
+	// 3. Verify that the compiler alert was successfully generated and injected into the additional_context!
+	additionalCtx, ok := res["additional_context"].(string)
+	if !ok || additionalCtx == "" {
+		t.Fatalf("expected additional_context to contain compile alert, got empty/nil: %v", res)
+	}
+
+	if !strings.Contains(additionalCtx, "Post-Edit Compiler Alert") {
+		t.Errorf("expected warning to contain 'Post-Edit Compiler Alert', got %q", additionalCtx)
+	}
+
+	if !strings.Contains(additionalCtx, "broken.go") {
+		t.Errorf("expected warning to contain the compiler error output for broken.go, got %q", additionalCtx)
+	}
+}

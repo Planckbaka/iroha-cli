@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -1137,6 +1140,21 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 	if postResult.AdditionalContext != "" {
 		contextParts = append(contextParts, postResult.AdditionalContext)
 	}
+
+	// Self-Healing post-edit compile verification check
+	if b.Name() == "file_edit" || b.Name() == "file_write" || b.Name() == "file_edit_batch" {
+		cmd := exec.Command("go", "build", "-o", os.DevNull, "./pkg/agent/...")
+		cmd.Dir = findGoModuleRoot()
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			compileErr := stderr.String()
+			if compileErr != "" {
+				contextParts = append(contextParts, fmt.Sprintf("⚠️ [Post-Edit Compiler Alert] Your recent edit introduced compile errors. Please prioritize fixing the compilation failure immediately before proceeding:\n%s", compileErr))
+			}
+		}
+	}
+
 	if len(contextParts) > 0 {
 		if result == nil {
 			result = make(map[string]any)
@@ -1242,4 +1260,24 @@ func commitPendingEdits() {
 	pendingEditSnapshots.mu.Lock()
 	defer pendingEditSnapshots.mu.Unlock()
 	pendingEditSnapshots.snapshots = make(map[string]string)
+}
+
+// findGoModuleRoot walks up from the current directory to find the directory containing go.mod
+func findGoModuleRoot() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	dir := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return cwd
 }

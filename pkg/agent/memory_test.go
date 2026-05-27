@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // ─── Save & Load round-trip ───────────────────────────────────────────────
@@ -582,5 +587,74 @@ func TestMemoryDreamHandler(t *testing.T) {
 	}
 	if len(res.Phases) == 0 {
 		t.Errorf("expected executed phases, got empty")
+	}
+}
+
+type mockMemoryLLM struct {
+	result string
+}
+
+func (m *mockMemoryLLM) Name() string { return "mock-memory-llm" }
+func (m *mockMemoryLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: m.result},
+				},
+			},
+			TurnComplete: true,
+		}, nil)
+	}
+}
+
+func TestSemanticMemoryConsolidation(t *testing.T) {
+	dir := t.TempDir()
+	mm := newMemoryManagerInDir(t, dir)
+
+	dc := NewDreamConsolidator()
+	dc.MinSessions = 1
+	dc.SessionCount = 1
+
+	// Save 3 dynamic memories to trigger semantic consolidation (which filters for len >= 3)
+	_ = mm.Save("pnpm_pref_1", "Desc 1", MemTypeUser, "Always indent Go code using tab characters.")
+	_ = mm.Save("pnpm_pref_2", "Desc 2", MemTypeUser, "Make sure tabs are used for indentation.")
+	_ = mm.Save("pnpm_pref_3", "Desc 3", MemTypeUser, "Indent with tab spacing rather than whitespace.")
+
+	origMode := GlobalPermissionManager.GetMode()
+	defer func() { _ = GlobalPermissionManager.SetMode(origMode) }()
+	_ = GlobalPermissionManager.SetMode(ModeDefault)
+
+	// Mock globalLLMModel
+	originalModel := globalLLMModel
+	defer func() { globalLLMModel = originalModel }()
+
+	globalLLMModel = &mockMemoryLLM{
+		result: `[
+			{
+				"name": "unified_tab_preference",
+				"description": "Unified preference for using tab indentation",
+				"content": "Ensure all files are formatted utilizing tab characters rather than spaces."
+			}
+		]`,
+	}
+
+	// Trigger consolidation
+	_, err := dc.Consolidate(mm, true)
+	if err != nil {
+		t.Fatalf("Consolidate failed: %v", err)
+	}
+
+	// Verify that the 3 original memories were deleted and replaced by the single consolidated memory!
+	if mm.Count() != 1 {
+		t.Errorf("expected exactly 1 consolidated memory, got %d", mm.Count())
+	}
+
+	mems := mm.List()[MemTypeUser]
+	if len(mems) != 1 || mems[0].Name != "unified_tab_preference" {
+		t.Errorf("expected 'unified_tab_preference', got %+v", mems)
+	}
+	if !strings.Contains(mems[0].Content, "tab characters") {
+		t.Errorf("expected consolidated content to contain 'tab characters', got %q", mems[0].Content)
 	}
 }
