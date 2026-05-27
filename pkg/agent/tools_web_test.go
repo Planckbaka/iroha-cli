@@ -94,3 +94,28 @@ func TestRateLimiterWindowExpiry(t *testing.T) {
 		t.Error("request after window expiry should be allowed")
 	}
 }
+
+func TestHTMLToText_NoiseStripping(t *testing.T) {
+	input := `<html>
+<head>
+  <style>body { background: red; }</style>
+  <script type="text/javascript">console.log("hello world");</script>
+</head>
+<body>
+  <h1>Heading</h1>
+  <noscript><p>Please enable javascript</p></noscript>
+  <svg height="100" width="100"><circle cx="50" cy="50" r="40" /></svg>
+  <iframe>Embedded frame content</iframe>
+  <p>Real content is here</p>
+</body>
+</html>`
+
+	got := htmlToText(strings.NewReader(input))
+	if strings.Contains(got, "background") || strings.Contains(got, "console.log") || strings.Contains(got, "enable javascript") || strings.Contains(got, "circle") || strings.Contains(got, "Embedded frame") {
+		t.Errorf("htmlToText failed to strip noise elements, got:\n%q", got)
+	}
+
+	if !strings.Contains(got, "Heading") || !strings.Contains(got, "Real content is here") {
+		t.Errorf("htmlToText stripped valid elements, got:\n%q", got)
+	}
+}

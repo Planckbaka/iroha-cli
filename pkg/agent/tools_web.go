@@ -169,6 +169,8 @@ func htmlToText(r io.Reader) string {
 		}
 		if n.Type == html.ElementNode {
 			switch n.Data {
+			case "script", "style", "noscript", "svg", "iframe":
+				return
 			case "br":
 				b.WriteString("\n")
 			case "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr":
@@ -197,7 +199,7 @@ func htmlToText(r io.Reader) string {
 // web_fetch
 // ---------------------------------------------------------------------------
 
-const maxFetchSize = 1 << 20 // 1 MB
+const maxFetchSize = 5 * 1024 * 1024 // 5 MB
 
 type WebFetchArgs struct {
 	URL     string `json:"url" description:"The HTTP(S) URL to fetch"`
@@ -264,8 +266,10 @@ func WebFetchHandler(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error
 	if err != nil {
 		return WebFetchResult{}, WrapToolError("web_fetch", args, fmt.Errorf("failed to read response body: %w", err))
 	}
+	truncated := false
 	if len(body) > maxFetchSize {
-		return WebFetchResult{}, fmt.Errorf("web_fetch: response body exceeds 1MB limit")
+		body = body[:maxFetchSize]
+		truncated = true
 	}
 
 	ct := resp.Header.Get("Content-Type")
@@ -280,6 +284,10 @@ func WebFetchHandler(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error
 		content = htmlToText(strings.NewReader(string(body)))
 	} else {
 		content = string(body)
+	}
+
+	if truncated {
+		content += "\n\n[Warning: Content truncated due to 5MB size limit]"
 	}
 
 	return WebFetchResult{
