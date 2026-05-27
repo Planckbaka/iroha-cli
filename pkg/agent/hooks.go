@@ -139,10 +139,15 @@ func (hm *HookManager) load() {
 		globalGoClaudePath := filepath.Join(home, ".go-claude", "hooks.json")
 		if _, err := os.Stat(globalIrohaPath); os.IsNotExist(err) {
 			if _, oldErr := os.Stat(globalGoClaudePath); oldErr == nil {
-				_ = os.MkdirAll(filepath.Dir(globalIrohaPath), 0755)
-				if data, copyErr := os.ReadFile(globalGoClaudePath); copyErr == nil {
-					_ = os.WriteFile(globalIrohaPath, data, 0644)
-					_ = os.Rename(globalGoClaudePath, globalGoClaudePath+".bak")
+				if err := os.MkdirAll(filepath.Dir(globalIrohaPath), 0755); err != nil {
+					LogError(CatSystem, "hooks_migration", "Failed to create global hooks directory during migration", err, map[string]any{"path": globalIrohaPath})
+				} else if data, copyErr := os.ReadFile(globalGoClaudePath); copyErr == nil {
+					if err := os.WriteFile(globalIrohaPath, data, 0644); err != nil {
+						LogError(CatSystem, "hooks_migration", "Failed to migrate global hooks config", err, map[string]any{"from": globalGoClaudePath, "to": globalIrohaPath})
+					}
+					if err := os.Rename(globalGoClaudePath, globalGoClaudePath+".bak"); err != nil {
+						LogError(CatSystem, "hooks_migration", "Failed to rename old global hooks config", err, map[string]any{"path": globalGoClaudePath})
+					}
 				}
 			}
 		}
@@ -155,10 +160,15 @@ func (hm *HookManager) load() {
 		projectGoClaudePath := filepath.Join(cwd, ".go-claude", "hooks.json")
 		if _, err := os.Stat(projectIrohaPath); os.IsNotExist(err) {
 			if _, oldErr := os.Stat(projectGoClaudePath); oldErr == nil {
-				_ = os.MkdirAll(filepath.Dir(projectIrohaPath), 0755)
-				if data, copyErr := os.ReadFile(projectGoClaudePath); copyErr == nil {
-					_ = os.WriteFile(projectIrohaPath, data, 0644)
-					_ = os.Rename(projectGoClaudePath, projectGoClaudePath+".bak")
+				if err := os.MkdirAll(filepath.Dir(projectIrohaPath), 0755); err != nil {
+					LogError(CatSystem, "hooks_migration", "Failed to create project hooks directory during migration", err, map[string]any{"path": projectIrohaPath})
+				} else if data, copyErr := os.ReadFile(projectGoClaudePath); copyErr == nil {
+					if err := os.WriteFile(projectIrohaPath, data, 0644); err != nil {
+						LogError(CatSystem, "hooks_migration", "Failed to migrate project hooks config", err, map[string]any{"from": projectGoClaudePath, "to": projectIrohaPath})
+					}
+					if err := os.Rename(projectGoClaudePath, projectGoClaudePath+".bak"); err != nil {
+						LogError(CatSystem, "hooks_migration", "Failed to rename old project hooks config", err, map[string]any{"path": projectGoClaudePath})
+					}
 				}
 			}
 		}

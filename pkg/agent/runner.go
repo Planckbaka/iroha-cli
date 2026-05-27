@@ -1245,11 +1245,15 @@ func rollbackPendingEdits() {
 	defer pendingEditSnapshots.mu.Unlock()
 
 	for path, content := range pendingEditSnapshots.snapshots {
+		var err error
 		if content == "" {
 			// File was newly created by the edit; remove it
-			_ = os.Remove(path)
+			err = os.Remove(path)
 		} else {
-			_ = os.WriteFile(path, []byte(content), 0644)
+			err = os.WriteFile(path, []byte(content), 0644)
+		}
+		if err != nil {
+			LogError(CatSystem, "rollback_edit_failed", "Failed to rollback pending edit", err, map[string]any{"path": path})
 		}
 	}
 	pendingEditSnapshots.snapshots = make(map[string]string)

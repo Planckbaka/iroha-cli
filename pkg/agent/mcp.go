@@ -312,9 +312,16 @@ func (r *MCPToolRouter) LoadAndStartPlugins() error {
 	// Migration logic for local plugins
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		if oldData, oldErr := os.ReadFile(oldCfgPath); oldErr == nil {
-			_ = os.MkdirAll(filepath.Dir(cfgPath), 0755)
-			_ = os.WriteFile(cfgPath, oldData, 0644)
-			_ = os.Rename(oldCfgPath, oldCfgPath+".bak")
+			if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+				LogError(CatSystem, "mcp_migration", "Failed to create MCP plugins directory during migration", err, map[string]any{"path": cfgPath})
+			} else {
+				if err := os.WriteFile(cfgPath, oldData, 0644); err != nil {
+					LogError(CatSystem, "mcp_migration", "Failed to migrate MCP plugins config", err, map[string]any{"from": oldCfgPath, "to": cfgPath})
+				}
+				if err := os.Rename(oldCfgPath, oldCfgPath+".bak"); err != nil {
+					LogError(CatSystem, "mcp_migration", "Failed to rename old MCP plugins config", err, map[string]any{"path": oldCfgPath})
+				}
+			}
 		}
 	}
 
