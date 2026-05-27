@@ -331,3 +331,77 @@ func TestMemoryManager_SyncToAgentsMD(t *testing.T) {
 		t.Error("AGENTS.md should not contain deleted memory 'prefer_pnpm'")
 	}
 }
+
+func TestMemoryManager_SyncFromAgentsMD(t *testing.T) {
+	dir := t.TempDir()
+	
+	// Create a pre-existing AGENTS.md with two memories
+	agentsContent := `# iroha-code
+
+## Purpose
+Some purpose text.
+
+## Agent Dynamic Learnings
+- **yarn_prefer** (user): User prefers yarn over npm
+  - *Content*:
+    Always run yarn commands.
+- **temp_fact** (project): A temporary project fact
+  - *Content*:
+    This is a temporary fact.
+`
+	
+	original, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
+	err := os.WriteFile("AGENTS.md", []byte(agentsContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write mock AGENTS.md: %v", err)
+	}
+
+	// Loading memory manager should parse and populate both
+	mm := NewMemoryManager()
+	if mm.Count() != 2 {
+		t.Fatalf("expected 2 entries parsed from AGENTS.md, got %d", mm.Count())
+	}
+
+	e1, ok := mm.entries["yarn_prefer"]
+	if !ok || e1.Description != "User prefers yarn over npm" || e1.Content != "Always run yarn commands." || e1.Type != MemTypeUser {
+		t.Errorf("yarn_prefer entry incorrect: %+v", e1)
+	}
+
+	e2, ok := mm.entries["temp_fact"]
+	if !ok || e2.Description != "A temporary project fact" || e2.Content != "This is a temporary fact." || e2.Type != MemTypeProject {
+		t.Errorf("temp_fact entry incorrect: %+v", e2)
+	}
+
+	// Update AGENTS.md: remove temp_fact, change yarn_prefer description
+	newAgentsContent := `# iroha-code
+
+## Agent Dynamic Learnings
+- **yarn_prefer** (user): User strongly prefers yarn over npm
+  - *Content*:
+    Always run yarn commands.
+`
+	err = os.WriteFile("AGENTS.md", []byte(newAgentsContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write updated mock AGENTS.md: %v", err)
+	}
+
+	// Reloading memory manager should update yarn_prefer and delete temp_fact
+	mm.Reload()
+	if mm.Count() != 1 {
+		t.Fatalf("expected 1 entry after reload/sync, got %d", mm.Count())
+	}
+
+	e1Updated, ok := mm.entries["yarn_prefer"]
+	if !ok || e1Updated.Description != "User strongly prefers yarn over npm" {
+		t.Errorf("yarn_prefer entry not updated correctly: %+v", e1Updated)
+	}
+
+	if _, exists := mm.entries["temp_fact"]; exists {
+		t.Error("temp_fact should have been deleted during reload sync")
+	}
+}

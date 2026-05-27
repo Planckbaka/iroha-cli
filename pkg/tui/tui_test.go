@@ -456,3 +456,34 @@ func TestTUI_GoalAndFrustration(t *testing.T) {
 		t.Errorf("expected frustration index 1 after KeyRight, got %d", m2.FrustrationSelectIndex)
 	}
 }
+
+func TestTUI_JSONValidation(t *testing.T) {
+	m := NewModel(nil, "test-session", false, "auto", "")
+	m.State = stateFrustrationPause
+	m.ConfirmEditActive = true
+	m.FrustrationSelectIndex = 0 // Edit Args
+	
+	// Case 1: Enter invalid JSON -> should fail validation and not exit edit state
+	m.TextArea.SetValue("{invalid json: }")
+	res, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM := res.(Model)
+	
+	if !newM.ConfirmEditActive {
+		t.Error("expected ConfirmEditActive to remain true when invalid JSON is submitted")
+	}
+	if newM.State != stateFrustrationPause {
+		t.Errorf("expected state to remain stateFrustrationPause, got %s", newM.State.String())
+	}
+	
+	// Case 2: Enter valid JSON -> should pass validation and exit edit state
+	newM.TextArea.SetValue(`{"command": "npm install --force"}`)
+	res2, _ := newM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM2 := res2.(Model)
+	
+	if newM2.ConfirmEditActive {
+		t.Error("expected ConfirmEditActive to become false when valid JSON is submitted")
+	}
+	if newM2.State != stateThinking {
+		t.Errorf("expected state to transition to stateThinking, got %s", newM2.State.String())
+	}
+}

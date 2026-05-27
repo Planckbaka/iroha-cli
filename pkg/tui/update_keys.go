@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -95,6 +96,16 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			switch msg.Type {
 			case tea.KeyEnter:
 				editedVal := m.TextArea.Value()
+				
+				if m.FrustrationSelectIndex == 0 {
+					var temp map[string]any
+					if err := json.Unmarshal([]byte(editedVal), &temp); err != nil {
+						m.TextArea.Placeholder = "Invalid JSON! " + err.Error()
+						m.Viewport.SetContent(m.renderViewportContent() + "\n\n" + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render("Error parsing JSON: "+err.Error()))
+						return m, nil, true
+					}
+				}
+
 				m.ConfirmEditActive = false
 				m.TextArea.SetValue("")
 				m.TextArea.Blur()

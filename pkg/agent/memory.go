@@ -83,6 +83,9 @@ type MemoryManager struct {
 	dirs    []string                // loaded directory paths (for display)
 }
 
+// agentsMDMu protects concurrent reads/writes to AGENTS.md.
+var agentsMDMu sync.Mutex
+
 // GlobalMemoryManager is the singleton used throughout the session.
 var GlobalMemoryManager = NewMemoryManager()
 
@@ -91,7 +94,9 @@ func NewMemoryManager() *MemoryManager {
 	mm := &MemoryManager{
 		entries: make(map[string]*MemoryEntry),
 	}
-	mm.load()
+	mm.mu.Lock()
+	defer mm.mu.Unlock()
+	mm.loadLocked()
 	return mm
 }
 
@@ -101,10 +106,10 @@ func (mm *MemoryManager) Reload() {
 	defer mm.mu.Unlock()
 	mm.entries = make(map[string]*MemoryEntry)
 	mm.dirs = nil
-	mm.load()
+	mm.loadLocked()
 }
 
-func (mm *MemoryManager) load() {
+func (mm *MemoryManager) loadLocked() {
 	// Layer 1: global memories
 	if home, err := os.UserHomeDir(); err == nil {
 		globalIrohaDir := filepath.Join(home, ".iroha", "memory")
@@ -124,7 +129,7 @@ func (mm *MemoryManager) load() {
 				}
 			}
 		}
-		mm.loadDir(globalIrohaDir)
+		mm.loadDirLocked(globalIrohaDir)
 	}
 	// Layer 2: project memories (merged on top; same name overwrites global)
 	if cwd, err := os.Getwd(); err == nil {
@@ -145,11 +150,14 @@ func (mm *MemoryManager) load() {
 				}
 			}
 		}
-		mm.loadDir(projectIrohaDir)
+		mm.loadDirLocked(projectIrohaDir)
 	}
+
+	// Layer 3: Bidirectional sync back from AGENTS.md (takes absolute priority)
+	_ = mm.syncFromAgentsMDLocked()
 }
 
-func (mm *MemoryManager) loadDir(dir string) {
+func (mm *MemoryManager) loadDirLocked(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -393,7 +401,10 @@ func tokenizeKeywords(text string) []string {
 func (mm *MemoryManager) rebuildIndex(dir string) {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()
+	mm.rebuildIndexLocked(dir)
+}
 
+func (mm *MemoryManager) rebuildIndexLocked(dir string) {
 	var lines []string
 	lines = append(lines, "# Memory Index", "")
 	for _, e := range mm.entries {
@@ -585,15 +596,18 @@ func (mm *MemoryManager) Update(name, description string, memType MemoryType, co
 // Delete removes a memory entry by name. Returns error if not found.
 func (mm *MemoryManager) Delete(name string) error {
 	mm.mu.Lock()
+	defer mm.mu.Unlock()
+	return mm.deleteLocked(name, false)
+}
+
+func (mm *MemoryManager) deleteLocked(name string, skipSyncToAgents bool) error {
 	existing, ok := mm.entries[name]
 	if !ok {
-		mm.mu.Unlock()
 		err := fmt.Errorf("memory entry %q not found", name)
 		LogError(CatSession, "memory_delete_not_found", "Attempted to delete non-existent memory", err, map[string]any{"name": name})
 		return err
 	}
 	delete(mm.entries, name)
-	mm.mu.Unlock()
 
 	// Find the directory containing the file and delete it.
 	deletedDir := ""
@@ -607,9 +621,11 @@ func (mm *MemoryManager) Delete(name string) error {
 	}
 
 	if deletedDir != "" {
-		mm.rebuildIndex(deletedDir)
+		mm.rebuildIndexLocked(deletedDir)
 	}
-	_ = syncToAgentsMD(existing, true)
+	if !skipSyncToAgents {
+		_ = syncToAgentsMD(existing, true)
+	}
 
 	LogAudit(CatSession, "memory_delete", fmt.Sprintf("Memory entry '%s' deleted", name), map[string]any{
 		"name": name,
@@ -635,6 +651,9 @@ type agentsBlock struct {
 }
 
 func syncToAgentsMD(entry *MemoryEntry, isDelete bool) error {
+	agentsMDMu.Lock()
+	defer agentsMDMu.Unlock()
+
 	agentsPath := "AGENTS.md"
 
 	// Read AGENTS.md
@@ -769,4 +788,158 @@ func makeAgentsBlock(entry *MemoryEntry) agentsBlock {
 		headerLine: header,
 		bodyLines:  body,
 	}
+}
+
+func (mm *MemoryManager) syncFromAgentsMDLocked() error {
+	agentsMDMu.Lock()
+	defer agentsMDMu.Unlock()
+
+	agentsPath := "AGENTS.md"
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	const sectionTitle = "## Agent Dynamic Learnings"
+	content := string(data)
+	idx := strings.Index(content, sectionTitle)
+	if idx == -1 {
+		return nil
+	}
+
+	afterSection := content[idx+len(sectionTitle):]
+	lines := strings.Split(afterSection, "\n")
+
+	type parsedBlock struct {
+		name        string
+		memType     MemoryType
+		description string
+		content     string
+	}
+	var parsedBlocks []parsedBlock
+	var currentBlock *parsedBlock
+	var contentLines []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- **") && strings.Contains(trimmed, "** (") {
+			if currentBlock != nil {
+				currentBlock.content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+				parsedBlocks = append(parsedBlocks, *currentBlock)
+				contentLines = nil
+			}
+			
+			nameEnd := strings.Index(trimmed[4:], "**")
+			if nameEnd == -1 {
+				currentBlock = nil
+				continue
+			}
+			name := trimmed[4 : 4+nameEnd]
+			
+			rest := strings.TrimSpace(trimmed[4+nameEnd+2:])
+			typeEnd := strings.Index(rest, ")")
+			if typeEnd == -1 || !strings.HasPrefix(rest, "(") {
+				currentBlock = nil
+				continue
+			}
+			tStr := rest[1:typeEnd]
+			
+			desc := ""
+			descIdx := strings.Index(rest[typeEnd:], ": ")
+			if descIdx != -1 {
+				desc = strings.TrimSpace(rest[typeEnd+descIdx+2:])
+			}
+			
+			currentBlock = &parsedBlock{
+				name:        name,
+				memType:     MemoryType(tStr),
+				description: desc,
+			}
+		} else if currentBlock != nil && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t") || line == "") {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine == "- *Content*:" || trimmedLine == "*Content*:" {
+				continue
+			}
+			if strings.HasPrefix(line, "    ") {
+				contentLines = append(contentLines, line[4:])
+			} else if strings.HasPrefix(line, "  ") {
+				contentLines = append(contentLines, line[2:])
+			} else {
+				contentLines = append(contentLines, trimmedLine)
+			}
+		} else {
+			if currentBlock != nil {
+				currentBlock.content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+				parsedBlocks = append(parsedBlocks, *currentBlock)
+				currentBlock = nil
+				contentLines = nil
+			}
+		}
+	}
+	if currentBlock != nil {
+		currentBlock.content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+		parsedBlocks = append(parsedBlocks, *currentBlock)
+	}
+
+	saveDir, err := projectMemoryDir()
+	if err != nil {
+		return err
+	}
+
+	presentNames := make(map[string]bool)
+
+	for _, pb := range parsedBlocks {
+		if !validMemoryTypes[pb.memType] {
+			continue
+		}
+		presentNames[pb.name] = true
+
+		existing, exists := mm.entries[pb.name]
+
+		if !exists || existing.Description != pb.description || existing.Content != pb.content || existing.Type != pb.memType {
+			filename := slugify(pb.name) + ".md"
+			now := time.Now().UTC()
+			entry := &MemoryEntry{
+				Name:        pb.name,
+				Description: pb.description,
+				Type:        pb.memType,
+				Content:     pb.content,
+				UpdatedAt:   now,
+				File:        filename,
+			}
+
+			_ = os.MkdirAll(saveDir, 0755)
+			filePath := filepath.Join(saveDir, filename)
+			text := renderFrontmatter(entry)
+			_ = os.WriteFile(filePath, []byte(text), 0600)
+
+			mm.entries[pb.name] = entry
+			if len(mm.dirs) == 0 || mm.dirs[len(mm.dirs)-1] != saveDir {
+				mm.dirs = append(mm.dirs, saveDir)
+			}
+		}
+	}
+
+	var toDelete []string
+	for name, entry := range mm.entries {
+		filePath := filepath.Join(saveDir, entry.File)
+		if _, err := os.Stat(filePath); err == nil {
+			if !presentNames[name] {
+				toDelete = append(toDelete, name)
+			}
+		}
+	}
+
+	for _, name := range toDelete {
+		_ = mm.deleteLocked(name, true)
+	}
+
+	if len(parsedBlocks) > 0 || len(toDelete) > 0 {
+		mm.rebuildIndexLocked(saveDir)
+	}
+
+	return nil
 }

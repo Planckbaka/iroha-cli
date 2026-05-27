@@ -986,6 +986,14 @@ func RenderStatusBar(m Model) string {
 		left = fmt.Sprintf("  mode:%s", modeStr)
 	}
 
+	if m.IsGoalMode && m.GoalText != "" {
+		goalText := m.GoalText
+		if len(goalText) > 20 {
+			goalText = goalText[:17] + "..."
+		}
+		left = fmt.Sprintf("  🎯 [goal] %s | %s", goalText, strings.TrimPrefix(left, "  "))
+	}
+
 	// Right: [mode] + token count + cost
 	var tokenStr string
 	if m.TotalTokens > 0 {
