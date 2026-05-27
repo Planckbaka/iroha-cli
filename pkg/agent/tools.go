@@ -83,11 +83,12 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 	cwd := getWorkdir(ctx)
 	cleanCWD := filepath.Clean(cwd)
 
-	words := strings.Fields(command)
-	for _, w := range words {
-		// Clean quotes if any
-		w = strings.Trim(w, "\"'`")
+	tokens, err := tokenizeCommand(command)
+	if err != nil {
+		return err
+	}
 
+	for _, w := range tokens {
 		// 1. Detect relative escaping
 		if strings.Contains(w, "..") {
 			abs, err := filepath.Abs(w)
@@ -101,7 +102,6 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 		// 2. Detect absolute paths outside CWD
 		if strings.HasPrefix(w, "/") {
 			isSystemSafe := false
-			safePrefixes := []string{"/bin", "/usr", "/opt", "/tmp", "/dev", "/etc/resolv.conf", "/etc/hosts", "/etc/ssl", "/var/run", "/private/tmp"}
 			for _, prefix := range safePrefixes {
 				if strings.HasPrefix(w, prefix) {
 					isSystemSafe = true
