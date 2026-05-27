@@ -44,6 +44,15 @@ func NewBashSecurityValidator() *BashSecurityValidator {
 			{"rm_rf", `\brm\s+(-[a-zA-Z]*)?r`, regexp.MustCompile(`\brm\s+(-[a-zA-Z]*)?r`)},
 			{"cmd_substitution", `\$\(`, regexp.MustCompile(`\$\(`)},
 			{"ifs_injection", `\bIFS\s*=`, regexp.MustCompile(`\bIFS\s*=`)},
+			{"heredoc", `<<-?|<<<`, regexp.MustCompile(`<<-?|<<<`)},
+			{"process_substitution", `[<>]\(`, regexp.MustCompile(`[<>]\(`)},
+			{"named_pipe", `\b(mkfifo|mknod)\b`, regexp.MustCompile(`\b(mkfifo|mknod)\b`)},
+			{"terminal_escape", `\\x1[bB]|\\033|\\e`, regexp.MustCompile(`\\x1[bB]|\\033|\\e`)},
+			{"file_descriptor", `exec\s+\d+>|[<>]&\d`, regexp.MustCompile(`exec\s+\d+>|[<>]&\d`)},
+			{"unsafe_source", `(?:^|\s)(?:source|\.)\s+/`, regexp.MustCompile(`(?:^|\s)(?:source|\.)\s+/`)},
+			{"encoding_attack", `\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}`, regexp.MustCompile(`\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}`)},
+			{"proxy_injection", `ProxyCommand=|git\s+-c\s+.*=\s*`, regexp.MustCompile(`ProxyCommand=|git\s+-c\s+.*=\s*`)},
+			{"unsafe_find_pipe", `find\b.*\|\s*while\s+read\b.*\b(rm|mv)\b`, regexp.MustCompile(`find\b.*\|\s*while\s+read\b.*\b(rm|mv)\b`)},
 		},
 	}
 }
@@ -186,7 +195,7 @@ func (pm *PermissionManager) Check(toolName string, args any) (string, string) {
 			// Severe patterns (sudo, rm_rf) get immediate deny
 			isSevere := false
 			for _, f := range failures {
-				if strings.Contains(f, "sudo") || strings.Contains(f, "rm_rf") {
+				if strings.Contains(f, "sudo") || strings.Contains(f, "rm_rf") || strings.Contains(f, "unsafe_find_pipe") || strings.Contains(f, "proxy_injection") {
 					isSevere = true
 				}
 			}
@@ -401,10 +410,29 @@ func matchesPattern(pattern, val string) bool {
 	if pattern == "*" || pattern == "" {
 		return true
 	}
-	// Use HasPrefix for wildcard suffix patterns (e.g. "mcp__*")
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
-		return strings.HasPrefix(val, prefix)
+	pLower := strings.ToLower(pattern)
+	vLower := strings.ToLower(val)
+
+	// If no wildcard is present, do a substring check to maintain full backward compatibility
+	if !strings.Contains(pLower, "*") {
+		return strings.Contains(vLower, pLower)
 	}
-	return strings.Contains(strings.ToLower(val), strings.ToLower(pattern))
+
+	// Dynamic glob matching
+	parts := strings.Split(pLower, "*")
+	if len(parts) == 1 {
+		return vLower == pLower
+	}
+	if !strings.HasPrefix(vLower, parts[0]) {
+		return false
+	}
+	vLower = vLower[len(parts[0]):]
+	for i := 1; i < len(parts)-1; i++ {
+		idx := strings.Index(vLower, parts[i])
+		if idx == -1 {
+			return false
+		}
+		vLower = vLower[idx+len(parts[i]):]
+	}
+	return strings.HasSuffix(vLower, parts[len(parts)-1])
 }

@@ -657,7 +657,12 @@ func (b *blockingConfirmationTool) Run(ctx tool.Context, args any) (map[string]a
 
 	if decision == "deny" {
 		LogToolTrace(b.Name(), args, "denied", time.Since(toolStartTime).Milliseconds())
-		return nil, fmt.Errorf("operation denied by security policy: %s", reason)
+		denials := GlobalPermissionManager.ConsecutiveDenials()
+		warnMsg := ""
+		if denials >= 3 {
+			warnMsg = fmt.Sprintf("\n⚠️  \x1b[1;33m[Safety Fuse]\x1b[0m %d consecutive denials. Consider switching to read-only Plan mode by typing `/mode plan`.", denials)
+		}
+		return nil, fmt.Errorf("operation denied by security policy: %s%s", reason, warnMsg)
 	}
 
 	runnable, ok := b.Tool.(adkRunnableTool)

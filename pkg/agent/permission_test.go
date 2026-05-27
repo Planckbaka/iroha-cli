@@ -177,3 +177,58 @@ func TestDenialCountersAndCircuitBreaker(t *testing.T) {
 		t.Errorf("Expected approval to reset denials, got %d", pm.ConsecutiveDenials())
 	}
 }
+
+func TestEnhancedBashSecurityValidator(t *testing.T) {
+	v := NewBashSecurityValidator()
+
+	tests := []struct {
+		name     string
+		command  string
+		expected bool // true if it should fail validation
+	}{
+		{"Heredoc Pattern", "cat <<EOF\nhello\nEOF", true},
+		{"Named Pipe", "mkfifo /tmp/pipe", true},
+		{"Proxy Injection", "git -c core.sshCommand=evilCommand fetch", true},
+		{"Unsafe Find Pipe", "find . -name '*.log' | while read file; do rm $file; done", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			failures := v.Validate(tt.command)
+			hasFailures := len(failures) > 0
+			if hasFailures != tt.expected {
+				t.Errorf("Validate(%q) got failures = %v (%d failures), expected failure: %t", tt.command, failures, len(failures), tt.expected)
+			}
+		})
+	}
+}
+
+func TestMatchesPatternWildcardGlob(t *testing.T) {
+	tests := []struct {
+		name     string
+		pattern  string
+		value    string
+		expected bool
+	}{
+		{"Exact match", "pkg/agent", "pkg/agent", true},
+		{"Exact match case insensitive", "pkg/agent", "PKG/AGENT", true},
+		{"Wildcard end", "pkg/*", "pkg/agent/permission.go", true},
+		{"Wildcard end mismatch", "pkg/*", "other/agent/permission.go", false},
+		{"Wildcard start", "*.go", "main.go", true},
+		{"Wildcard start mismatch", "*.go", "main.py", false},
+		{"Wildcard middle", "pkg/*/agent", "pkg/test/agent", true},
+		{"Wildcard middle mismatch", "pkg/*/agent", "pkg/test/other", false},
+		{"Multiple wildcards", "pkg/*/agent/*.go", "pkg/test/agent/permission.go", true},
+		{"Substring fallback", "agent", "pkg/agent/permission.go", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchesPattern(tt.pattern, tt.value)
+			if result != tt.expected {
+				t.Errorf("matchesPattern(%q, %q) got %t, expected %t", tt.pattern, tt.value, result, tt.expected)
+			}
+		})
+	}
+}
+
