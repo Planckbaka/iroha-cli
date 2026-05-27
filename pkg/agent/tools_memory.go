@@ -121,3 +121,27 @@ func MemoryDeleteHandler(_ tool.Context, args MemoryDeleteArgs) (MemoryDeleteRes
 	}
 	return MemoryDeleteResult{OK: true, Message: "Memory deleted: " + args.Name}, nil
 }
+
+// MemoryDreamArgs holds arguments to manually trigger memory consolidation.
+type MemoryDreamArgs struct {
+	Force bool `json:"force" description:"If true, bypasses cooldown, scan throttle, and session thresholds (Gates 4, 5, 6)"`
+}
+
+// MemoryDreamResult holds the phases executed or error.
+type MemoryDreamResult struct {
+	OK      bool     `json:"ok"`
+	Message string   `json:"message"`
+	Phases  []string `json:"phases,omitempty"`
+}
+
+func MemoryDreamHandler(_ tool.Context, args MemoryDreamArgs) (MemoryDreamResult, error) {
+	phases, err := GlobalDreamConsolidator.Consolidate(GlobalMemoryManager, args.Force)
+	if err != nil {
+		return MemoryDreamResult{OK: false, Message: err.Error()}, nil
+	}
+	return MemoryDreamResult{
+		OK:      true,
+		Message: "Dream consolidation completed successfully.",
+		Phases:  phases,
+	}, nil
+}

@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ─── Save & Load round-trip ───────────────────────────────────────────────
@@ -403,5 +405,182 @@ Some purpose text.
 
 	if _, exists := mm.entries["temp_fact"]; exists {
 		t.Error("temp_fact should have been deleted during reload sync")
+	}
+}
+
+// ─── DreamConsolidator Gates & Phases ─────────────────────────────────────
+
+func TestDreamConsolidatorGates(t *testing.T) {
+	dir := t.TempDir()
+	mm := newMemoryManagerInDir(t, dir)
+
+	dc := NewDreamConsolidator()
+	dc.MinSessions = 2
+
+	// Setup initial dynamic learnings / entries
+	_ = mm.Save("test_mem1", "Desc 1", MemTypeUser, "Always write tests.")
+	
+	// Ensure we are not in Plan Mode
+	origMode := GlobalPermissionManager.GetMode()
+	defer func() { _ = GlobalPermissionManager.SetMode(origMode) }()
+	_ = GlobalPermissionManager.SetMode(ModeDefault)
+
+	// Gate 1: Enabled
+	dc.Enabled = false
+	canRun, reason := dc.ShouldConsolidate(mm, false)
+	if canRun || !strings.Contains(reason, "Gate 1") {
+		t.Errorf("expected Gate 1 failure when disabled, got: canRun=%v, reason=%q", canRun, reason)
+	}
+	dc.Enabled = true
+
+	// Gate 3: Plan Mode check
+	_ = GlobalPermissionManager.SetMode(ModePlan)
+	canRun, reason = dc.ShouldConsolidate(mm, false)
+	if canRun || !strings.Contains(reason, "Gate 3") {
+		t.Errorf("expected Gate 3 failure in Plan Mode, got: canRun=%v, reason=%q", canRun, reason)
+	}
+	_ = GlobalPermissionManager.SetMode(ModeDefault)
+
+	// Gate 6: Session Count check
+	dc.SessionCount = 1
+	canRun, reason = dc.ShouldConsolidate(mm, false)
+	if canRun || !strings.Contains(reason, "Gate 6") {
+		t.Errorf("expected Gate 6 failure with sessionCount < MinSessions, got: canRun=%v, reason=%q", canRun, reason)
+	}
+	dc.SessionCount = 3 // Satisfies gate (MinSessions is 2)
+
+	// Bypass Cooldown / Throttle using Force=true
+	// If force=true, cooldown (Gate 4), throttle (Gate 5), session count (Gate 6) are bypassed.
+	dc.SessionCount = 1 // would ordinarily fail Gate 6
+	canRun, reason = dc.ShouldConsolidate(mm, true)
+	if !canRun {
+		t.Errorf("expected ShouldConsolidate to pass with force=true despite low sessions, got error: %s", reason)
+	}
+	// Release lock acquired by direct ShouldConsolidate call so Consolidate can acquire it
+	dc.releaseLock(filepath.Join(dir, ".iroha", "memory"))
+	
+	// Test lock clean up (Gate 7)
+	// We call Consolidate which will run ShouldConsolidate, acquire lock, do nothing, and release lock
+	phases, err := dc.Consolidate(mm, true)
+	if err != nil {
+		t.Fatalf("Consolidate failed: %v", err)
+	}
+	if len(phases) == 0 {
+		t.Errorf("expected completed phases, got 0")
+	}
+
+	// Verify that the lock file got cleaned up after deferred releaseLock
+	lockPath := filepath.Join(dir, ".iroha", "memory", ".dream_lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Errorf("expected lock file to be deleted, but it still exists")
+	}
+}
+
+func TestDreamConsolidatorPhases(t *testing.T) {
+	dir := t.TempDir()
+	mm := newMemoryManagerInDir(t, dir)
+
+	dc := NewDreamConsolidator()
+	dc.MinSessions = 1
+	dc.SessionCount = 1
+
+	// Ensure not in Plan Mode
+	origMode := GlobalPermissionManager.GetMode()
+	defer func() { _ = GlobalPermissionManager.SetMode(origMode) }()
+	_ = GlobalPermissionManager.SetMode(ModeDefault)
+
+	// Phase 3 & 4 tests: Deduplication & Pruning
+	// Create two entries with the exact same content in MemTypeUser
+	_ = mm.Save("use_tabs_1", "User prefers tabs 1", MemTypeUser, "Always indent using tab characters.")
+	// Sleep a tiny bit to make sure updated timestamps are different
+	time.Sleep(10 * time.Millisecond)
+	_ = mm.Save("use_tabs_2", "User prefers tabs 2", MemTypeUser, "Always indent using tab characters.")
+
+	// Also save a completely unique entry
+	_ = mm.Save("unique_mem", "Unique fact", MemTypeProject, "Unique content.")
+
+	if mm.Count() != 3 {
+		t.Fatalf("expected 3 entries initially, got %d", mm.Count())
+	}
+
+	// Run consolidation (force cooldown bypass to be safe)
+	phases, err := dc.Consolidate(mm, true)
+	if err != nil {
+		t.Fatalf("Consolidate failed: %v", err)
+	}
+	if len(phases) == 0 {
+		t.Errorf("expected phases returned, got empty")
+	}
+
+	// One of the duplicate "use_tabs" memories should have been deleted!
+	// So we should have exactly 2 entries now: one use_tabs (either 1 or 2) and unique_mem
+	if mm.Count() != 2 {
+		t.Errorf("expected 2 entries after deduplication, got %d", mm.Count())
+	}
+
+	// Verify that unique_mem is preserved
+	all := mm.List()
+	projMems := all[MemTypeProject]
+	if len(projMems) != 1 || projMems[0].Name != "unique_mem" {
+		t.Errorf("expected 'unique_mem' to be preserved, got %+v", projMems)
+	}
+
+	// Pruning Test: let's create 105 entries and verify they get pruned down to 100!
+	for i := 1; i <= 105; i++ {
+		name := fmt.Sprintf("dummy_mem_%d", i)
+		time.Sleep(1 * time.Millisecond)
+		_ = mm.Save(name, fmt.Sprintf("Dummy desc %d", i), MemTypeUser, fmt.Sprintf("Dummy content %d", i))
+	}
+
+	// Ensure it exceeds 100
+	if mm.Count() < 100 {
+		t.Fatalf("expected count near 105, got %d", mm.Count())
+	}
+
+	// Consolidate again with force=true
+	_, err = dc.Consolidate(mm, true)
+	if err != nil {
+		t.Fatalf("Pruning Consolidate failed: %v", err)
+	}
+
+	// Check that count has been capped at exactly MaxMemoryEntries (100)
+	if mm.Count() != 100 {
+		t.Errorf("expected count to be capped at exactly %d (MaxMemoryEntries), got %d", MaxMemoryEntries, mm.Count())
+	}
+}
+
+func TestMemoryDreamHandler(t *testing.T) {
+	dir := t.TempDir()
+	
+	// Set up memory manager in this temp directory
+	original, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
+	// Re-initialize a local consolidator/manager
+	GlobalMemoryManager = NewMemoryManager()
+	GlobalDreamConsolidator = NewDreamConsolidator()
+	GlobalDreamConsolidator.SessionCount = 2
+	GlobalDreamConsolidator.MinSessions = 1
+
+	origMode := GlobalPermissionManager.GetMode()
+	defer func() { _ = GlobalPermissionManager.SetMode(origMode) }()
+	_ = GlobalPermissionManager.SetMode(ModeDefault)
+
+	// Save a test memory
+	_ = GlobalMemoryManager.Save("test_dream_tool", "Tool memory", MemTypeUser, "Always be thorough.")
+
+	// Call the handler
+	res, err := MemoryDreamHandler(nil, MemoryDreamArgs{Force: true})
+	if err != nil {
+		t.Fatalf("MemoryDreamHandler returned error: %v", err)
+	}
+	if !res.OK {
+		t.Errorf("expected OK to be true, got false with message: %q", res.Message)
+	}
+	if len(res.Phases) == 0 {
+		t.Errorf("expected executed phases, got empty")
 	}
 }

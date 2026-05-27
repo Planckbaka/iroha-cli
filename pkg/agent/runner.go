@@ -315,6 +315,13 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	globalLLMModel = modelAdapter
 
+	// Trigger non-blocking automatic memory consolidation pass ("Dream Pass") in background
+	if GlobalDreamConsolidator != nil {
+		go func() {
+			_, _ = GlobalDreamConsolidator.Consolidate(GlobalMemoryManager, false)
+		}()
+	}
+
 	return &CustomRunner{
 		adkRunner:       adkRunner,
 		llmModel:        modelAdapter,

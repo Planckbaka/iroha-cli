@@ -238,6 +238,15 @@ func GetSWETools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	// 7e. memory_dream — manually trigger consolidation
+	memoryDreamTool, err := functiontool.New(functiontool.Config{
+		Name:        "memory_dream",
+		Description: "Manually trigger the 4-phase persistent memory consolidation ('Dream') pass to deduplicate, merge, and prune stored memory entries.",
+	}, MemoryDreamHandler)
+	if err != nil {
+		return nil, err
+	}
+
 	// 8. task_create
 	taskCreateTool, err := functiontool.New(functiontool.Config{
 		Name:        "task_create",
@@ -550,7 +559,7 @@ func GetSWETools() ([]tool.Tool, error) {
 
 	resTools := []tool.Tool{
 		readTool, writeTool, editTool, editBatchTool, listDirTool, grepTool, findTool, shellTool, todoTool,
-		memorySaveTool, memoryListTool, memorySearchTool, memoryUpdateTool, memoryDeleteTool,
+		memorySaveTool, memoryListTool, memorySearchTool, memoryUpdateTool, memoryDeleteTool, memoryDreamTool,
 		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
 		bgRunTool, bgCheckTool,
 		schCreateTool, schListTool, schDeleteTool,
