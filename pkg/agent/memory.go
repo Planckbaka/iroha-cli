@@ -125,56 +125,17 @@ func (mm *MemoryManager) Reload() {
 }
 
 func (mm *MemoryManager) loadLocked() {
+	// One-time legacy migration gated by ~/.iroha/.migrated sentinel
+	migrateGoClaudeIfNeeded()
+
 	// Layer 1: global memories
 	if home, err := os.UserHomeDir(); err == nil {
 		globalIrohaDir := filepath.Join(home, ".iroha", "memory")
-		globalGoClaudeDir := filepath.Join(home, ".go-claude", "memory")
-		if _, err := os.Stat(globalIrohaDir); os.IsNotExist(err) {
-			if _, oldErr := os.Stat(globalGoClaudeDir); oldErr == nil {
-				if err := os.MkdirAll(globalIrohaDir, 0755); err != nil {
-					LogError(CatSystem, "memory_migration", "Failed to create global memory directory during migration", err, map[string]any{"path": globalIrohaDir})
-				} else if files, readErr := os.ReadDir(globalGoClaudeDir); readErr == nil {
-					for _, f := range files {
-						oldFile := filepath.Join(globalGoClaudeDir, f.Name())
-						newFile := filepath.Join(globalIrohaDir, f.Name())
-						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
-							if err := os.WriteFile(newFile, data, 0600); err != nil {
-								LogError(CatSystem, "memory_migration", "Failed to migrate memory file", err, map[string]any{"from": oldFile, "to": newFile})
-							}
-						}
-					}
-					if err := os.Rename(globalGoClaudeDir, globalGoClaudeDir+".bak"); err != nil {
-						LogError(CatSystem, "memory_migration", "Failed to rename old memory directory", err, map[string]any{"path": globalGoClaudeDir})
-					}
-				}
-			}
-		}
 		mm.loadDirLocked(globalIrohaDir)
 	}
 	// Layer 2: project memories (merged on top; same name overwrites global)
 	if cwd, err := os.Getwd(); err == nil {
 		projectIrohaDir := filepath.Join(cwd, ".iroha", "memory")
-		projectGoClaudeDir := filepath.Join(cwd, ".go-claude", "memory")
-		if _, err := os.Stat(projectIrohaDir); os.IsNotExist(err) {
-			if _, oldErr := os.Stat(projectGoClaudeDir); oldErr == nil {
-				if err := os.MkdirAll(projectIrohaDir, 0755); err != nil {
-					LogError(CatSystem, "memory_migration", "Failed to create project memory directory during migration", err, map[string]any{"path": projectIrohaDir})
-				} else if files, readErr := os.ReadDir(projectGoClaudeDir); readErr == nil {
-					for _, f := range files {
-						oldFile := filepath.Join(projectGoClaudeDir, f.Name())
-						newFile := filepath.Join(projectIrohaDir, f.Name())
-						if data, copyErr := os.ReadFile(oldFile); copyErr == nil {
-							if err := os.WriteFile(newFile, data, 0600); err != nil {
-								LogError(CatSystem, "memory_migration", "Failed to migrate project memory file", err, map[string]any{"from": oldFile, "to": newFile})
-							}
-						}
-					}
-					if err := os.Rename(projectGoClaudeDir, projectGoClaudeDir+".bak"); err != nil {
-						LogError(CatSystem, "memory_migration", "Failed to rename old project memory directory", err, map[string]any{"path": projectGoClaudeDir})
-					}
-				}
-			}
-		}
 		mm.loadDirLocked(projectIrohaDir)
 	}
 
@@ -528,14 +489,7 @@ func (mm *MemoryManager) Search(query string) []*MemoryEntry {
 		}
 	}
 
-	// Sort by relevance (descending score).
-	for i := 0; i < len(matches); i++ {
-		for j := i + 1; j < len(matches); j++ {
-			if matches[j].score > matches[i].score {
-				matches[i], matches[j] = matches[j], matches[i]
-			}
-		}
-	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
 
 	result := make([]*MemoryEntry, len(matches))
 	for i, m := range matches {
