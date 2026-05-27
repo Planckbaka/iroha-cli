@@ -52,6 +52,31 @@ func TestRedactSecrets(t *testing.T) {
 			input:    "secret=supersecurepassword123",
 			expected: "secret=[REDACTED]",
 		},
+		{
+			name:     "Google/Gemini API Key",
+			input:    "key=AIzaSyABCdefGHIjklMNOpqrsTUVwxyz1234567890",
+			expected: "key=[REDACTED]",
+		},
+		{
+			name:     "Anthropic API Key with sk-ant- prefix",
+			input:    "using key sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456",
+			expected: "using key [REDACTED]",
+		},
+		{
+			name:     "x-api-key header",
+			input:    "x-api-key: sk-ant-api03-my-anthropic-key-here12345",
+			expected: "x-api-key: [REDACTED]",
+		},
+		{
+			name:     "JSON api-key field with hyphen",
+			input:    `{"api-key": "sensitive-value-here", "status": "ok"}`,
+			expected: `{"api-key":"[REDACTED]", "status": "ok"}`,
+		},
+		{
+			name:     "env-style api-key assignment",
+			input:    "api-key=my-secret-key-12345",
+			expected: "api-key=[REDACTED]",
+		},
 	}
 
 	for _, tt := range tests {

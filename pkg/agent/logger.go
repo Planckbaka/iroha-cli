@@ -37,10 +37,12 @@ var secretPatterns = []struct {
 	pattern     *regexp.Regexp
 	replacement string
 }{
-	{regexp.MustCompile(`(?i)\b(sk-[a-zA-Z0-9]{20,})\b`), "[REDACTED]"},
-	{regexp.MustCompile(`(?i)\b(bearer\s+[a-zA-Z0-9_\-\.\~]{10,})\b`), "Bearer [REDACTED]"},
-	{regexp.MustCompile(`(?i)"(api_key|token|password|secret|key)"\s*:\s*"[^"]+"`), `"$1":"[REDACTED]"`},
-	{regexp.MustCompile(`(?i)(api_key|token|password|secret|key)\s*=\s*[^\s&"\n]+`), `$1=[REDACTED]`},
+	{regexp.MustCompile(`(?i)\b(sk-[a-zA-Z0-9_-]{20,})\b`), "[REDACTED]"},
+	{regexp.MustCompile(`(?i)\b(AIzaSy[a-zA-Z0-9_-]{30,})\b`), "[REDACTED]"},
+	{regexp.MustCompile(`(?i)\b(bearer\s+)[a-zA-Z0-9_\-\.\~]{10,}`), "Bearer [REDACTED]"},
+	{regexp.MustCompile(`(?i)(x-api-key\s*:\s*)[a-zA-Z0-9_-]+`), `$1[REDACTED]`},
+	{regexp.MustCompile(`(?i)"(api_key|token|password|secret|key|api-key)"\s*:\s*"[^"]+"`), `"$1":"[REDACTED]"`},
+	{regexp.MustCompile(`(?i)(api_key|token|password|secret|key|api-key)\s*=\s*[^\s&"\n]+`), `$1=[REDACTED]`},
 }
 
 // RedactSecrets applies regular expressions to mask API keys and passwords.
