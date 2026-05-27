@@ -600,6 +600,23 @@ func (b *blockingConfirmationTool) runWithHooks(ctx tool.Context, args any, runn
 }
 
 // ToolCircuitBreaker tracks consecutive failures of the same tool with the same arguments
+// and blocks further execution after a configurable threshold.
+//
+// Known limitations:
+//   - Exact-argument matching: args are formatted via fmt.Sprintf("%v", args) and compared
+//     as strings. Structurally equivalent but differently typed values (e.g. int 0 vs float64 0)
+//     may not match, causing the breaker to treat them as separate failure sequences.
+//   - No time window: there is no expiry on the failure streak. A tool that failed twice,
+//     then succeeded once with different args, then fails once with the original args will
+//     reset to 0 on the success and start a new streak — but there is no sliding time window
+//     to expire old failures.
+//   - Single-instance only: the breaker is global (GlobalToolCircuitBreaker) and not safe
+//     for concurrent use across separate agent instances sharing the same process. It resets
+//     at the start of each Execute call, which mitigates but does not eliminate cross-turn
+//     interference.
+//   - No per-tool threshold: all tools share the same failure count threshold (currently 3).
+//     A frequently-retried tool with benign failures will trip the breaker at the same rate
+//     as a genuinely broken one.
 type ToolCircuitBreaker struct {
 	mu           sync.Mutex
 	lastTool     string
