@@ -93,6 +93,26 @@ func (d *DynamicLLMDelegator) AddTokens(n int) {
 	}
 }
 
+// RunnerDeps holds all manager dependencies injected into CustomRunner.
+// Replaces direct global access within runner methods.
+type RunnerDeps struct {
+	TodoManager        *TodoManager
+	MemoryManager      *MemoryManager
+	SessionService     *PersistentSessionService
+	BackgroundManager  *BackgroundManager
+	CronScheduler      *CronScheduler
+	HookManager        *HookManager
+	Logger             *LoggerManager
+	ToolCircuitBreaker *ToolCircuitBreaker
+	AgentPool          *AgentPool
+	TeamManager        *TeamManager
+	DreamConsolidator  *DreamConsolidator
+	AutoReviewConfig   *autoReviewConfig
+	PermissionManager  *PermissionManager
+	TaskManager        *TaskManager
+	MCPRouter          *MCPToolRouter
+}
+
 // CustomRunner wraps ADK runner and manages background execution
 type CustomRunner struct {
 	mu              sync.RWMutex
@@ -105,6 +125,7 @@ type CustomRunner struct {
 	BaseURL         string
 	APIFormat       llm.APIFormat
 	GenkitRegistry  *genkit.Genkit
+	deps            RunnerDeps
 }
 
 // initGenkit creates a Genkit registry with the appropriate provider plugin.
@@ -240,6 +261,23 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 		BaseURL:         baseURL,
 		APIFormat:       apiFormat,
 		GenkitRegistry:  g,
+		deps: RunnerDeps{
+			TodoManager:        GlobalTodoManager,
+			MemoryManager:      GlobalMemoryManager,
+			SessionService:     GlobalSessionService,
+			BackgroundManager:  GlobalBackgroundManager,
+			CronScheduler:      GlobalCronScheduler,
+			HookManager:        GlobalHookManager,
+			Logger:             GlobalLogger,
+			ToolCircuitBreaker: GlobalToolCircuitBreaker,
+			AgentPool:          GlobalAgentPool,
+			TeamManager:        GlobalTeamManager,
+			DreamConsolidator:  GlobalDreamConsolidator,
+			AutoReviewConfig:   GlobalAutoReviewConfig,
+			PermissionManager:  GlobalPermissionManager,
+			TaskManager:        GlobalTaskManager,
+			MCPRouter:          GlobalMCPRouter,
+		},
 	}, nil
 }
 
@@ -272,6 +310,7 @@ func (cr *CustomRunner) SwitchModel(provider llm.ProviderType, modelName string,
 	GlobalAgentPool.APIFormat = apiFormat
 	GlobalAgentPool.GenkitRegistry = g
 	GlobalAgentPool.mu.Unlock()
+	cr.deps.AgentPool = GlobalAgentPool
 
 	SetAutoReviewConfig(newAdapter)
 	globalLLMModel = newAdapter
@@ -301,8 +340,8 @@ func (cr *CustomRunner) GetTokenUsage() int {
 
 // Execute handles running a prompt asynchronously and piping events to a callback
 func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt string, onEvent func(*session.Event), onError func(error), onDone func()) {
-	GlobalToolCircuitBreaker.Reset()
-	GlobalLogger.SetSessionID(sessionID)
+	cr.deps.ToolCircuitBreaker.Reset()
+	cr.deps.Logger.SetSessionID(sessionID)
 
 	LogAudit(CatUserInput, "user_prompt", "User submitted a prompt to the agent", map[string]any{
 		"user_id":    userID,
@@ -331,9 +370,9 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		}()
 
 		// Drain background task notifications
-		bgNotifs := GlobalBackgroundManager.DrainNotifications()
+		bgNotifs := cr.deps.BackgroundManager.DrainNotifications()
 		// Drain cron scheduler notifications
-		cronNotifs := GlobalCronScheduler.DrainNotifications()
+		cronNotifs := cr.deps.CronScheduler.DrainNotifications()
 
 		var sb strings.Builder
 		if len(bgNotifs) > 0 {
@@ -366,7 +405,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		}
 
 		// Fire HookUserPrompt before sending to LLM
-		hookUserResult := GlobalHookManager.RunHooks(HookUserPrompt, HookContext{
+		hookUserResult := cr.deps.HookManager.RunHooks(HookUserPrompt, HookContext{
 			Prompt:    prompt,
 			SessionID: sessionID,
 		})
@@ -423,7 +462,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		}
 
 		// Fire HookAgentResponse after LLM response is fully received
-		GlobalHookManager.RunHooks(HookAgentResponse, HookContext{
+		cr.deps.HookManager.RunHooks(HookAgentResponse, HookContext{
 			ResponseLength: responseTextLen,
 			SessionID:      sessionID,
 		})
@@ -491,7 +530,7 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 		}
 
 		// Fire HookSessionEnd before signaling completion
-		GlobalHookManager.RunHooks(HookSessionEnd, HookContext{
+		cr.deps.HookManager.RunHooks(HookSessionEnd, HookContext{
 			SessionID: sessionID,
 		})
 
