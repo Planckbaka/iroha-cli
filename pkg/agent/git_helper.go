@@ -49,12 +49,12 @@ func GitCommit(msg string) error {
 	// Aider-style automated staging: ensure all untracked/modified files are staged
 	addCmd := exec.Command("git", "add", "-A")
 	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("failed to git add -A: %v", err)
+		return fmt.Errorf("failed to git add -A: %w", err)
 	}
 
 	commitCmd := exec.Command("git", "commit", "-m", msg)
 	if err := commitCmd.Run(); err != nil {
-		return fmt.Errorf("failed to git commit: %v", err)
+		return fmt.Errorf("failed to git commit: %w", err)
 	}
 	return nil
 }

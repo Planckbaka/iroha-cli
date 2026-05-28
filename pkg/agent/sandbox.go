@@ -39,6 +39,7 @@ func wrapMacSandbox(ctx context.Context, cmd *exec.Cmd, workdir string) (*exec.C
 	sandboxExecPath, err := exec.LookPath("sandbox-exec")
 	if err != nil {
 		// If sandbox-exec is missing, fall back gracefully
+		LogWarn(CatSecurity, "sandbox_unavailable", "sandbox-exec not found; commands will run unsandboxed", map[string]any{"os": "darwin"})
 		return cmd, nil
 	}
 
@@ -117,6 +118,7 @@ func wrapLinuxSandbox(ctx context.Context, cmd *exec.Cmd, workdir string) (*exec
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
 		// Bubblewrap is not installed, fall back gracefully
+		LogWarn(CatSecurity, "sandbox_unavailable", "bwrap not found; commands will run unsandboxed", map[string]any{"os": "linux"})
 		return cmd, nil
 	}
 

@@ -17,7 +17,19 @@ func init() {
 		"/var/run", "/private/tmp",
 	}
 	if custom := os.Getenv("IROHA_SAFE_PREFIXES"); custom != "" {
-		safePrefixes = strings.Split(custom, ",")
+		candidates := strings.Split(custom, ",")
+		var valid []string
+		for _, p := range candidates {
+			p = strings.TrimSpace(p)
+			if p == "" || p == "/" || len(p) < 3 {
+				LogWarn(CatSecurity, "invalid_safe_prefix", "Rejecting invalid IROHA_SAFE_PREFIXES entry", map[string]any{"prefix": p})
+				continue
+			}
+			valid = append(valid, p)
+		}
+		if len(valid) > 0 {
+			safePrefixes = valid
+		}
 	}
 }
 

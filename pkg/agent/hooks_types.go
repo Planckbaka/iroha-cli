@@ -53,7 +53,7 @@ type HookDef struct {
 	URL            string            `json:"url,omitempty"`
 	Prompt         string            `json:"prompt,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"`
-	AllowedEnvVars []string          `json:"allowedEnvVars,omitempty"`
+	AllowedEnvVars []string          `json:"allowed_env_vars,omitempty"`
 	Timeout        int               `json:"timeout,omitempty"`
 	OnTimeout      string            `json:"on_timeout,omitempty"`
 	Async          bool              `json:"async,omitempty"`

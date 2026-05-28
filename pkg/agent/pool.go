@@ -93,17 +93,20 @@ func TypePromptPrefix(typeName string) string {
 func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string, error) {
 	ap.mu.Lock()
 	subRunner, exists := ap.runners[teammate.Name]
-	ap.mu.Unlock()
+	if exists {
+		ap.mu.Unlock()
+	} else {
+		// Create runner while holding the lock to prevent duplicates.
+		// Release lock only for heavy I/O work, then re-acquire to insert.
 
-	if !exists {
 		// 1. Ensure worktree directory exists dynamically if it doesn't yet
 		worktreePath := filepath.Join(GlobalWorktreeManager.worktreesDir, teammate.Name)
+		ap.mu.Unlock()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			_, _ = GlobalWorktreeManager.Create(teammate.Name, "")
 		}
 
 		// 2. Setup subagent ADK Runner
-		// Retrieve curated tools based on agent type
 		tools, err := GetToolsForType(teammate.Type)
 		if err != nil {
 			return "", err
@@ -114,10 +117,8 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 			wrappedTools = append(wrappedTools, &blockingConfirmationTool{Tool: t})
 		}
 
-		// Build system prompt with type-specific prefix
 		systemPrompt := TypePromptPrefix(teammate.Type) + teammate.SystemPrompt
 
-		// Setup subagent model adapter with subagent system prompt
 		ap.mu.RLock()
 		prov := ap.Provider
 		mod := ap.ModelName
@@ -127,7 +128,6 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		genkitReg := ap.GenkitRegistry
 		ap.mu.RUnlock()
 
-		// Retrieve or build subagent adapter
 		subAdapter, err := llm.NewAdapter(genkitReg, prov, mod, key, base, systemPrompt, fmtFormat, runnerHooks{})
 		if err != nil {
 			return "", err
@@ -155,7 +155,12 @@ func (ap *AgentPool) ExecuteMessage(teammate *Teammate, msg TeamMessage) (string
 		}
 
 		ap.mu.Lock()
-		ap.runners[teammate.Name] = subRunner
+		// Double-check: another goroutine may have created a runner for this teammate
+		if existing, ok := ap.runners[teammate.Name]; ok {
+			subRunner = existing
+		} else {
+			ap.runners[teammate.Name] = subRunner
+		}
 		ap.mu.Unlock()
 	}
 

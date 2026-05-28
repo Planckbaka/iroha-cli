@@ -122,8 +122,11 @@ func (b *IPCBridge) readLoop(conn net.Conn) {
 		}
 
 		// Dispatch message
-		if b.onMessage != nil {
-			b.onMessage(*msg)
+		b.mu.RLock()
+		handler := b.onMessage
+		b.mu.RUnlock()
+		if handler != nil {
+			handler(*msg)
 		}
 		select {
 		case b.msgCh <- *msg:
@@ -202,7 +205,9 @@ func (b *IPCBridge) Receive() <-chan IPCMessage {
 
 // SetOnMessage sets a callback invoked for each incoming message.
 func (b *IPCBridge) SetOnMessage(fn func(IPCMessage)) {
+	b.mu.Lock()
 	b.onMessage = fn
+	b.mu.Unlock()
 }
 
 // Close shuts down the listener and all connections.

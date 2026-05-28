@@ -105,7 +105,9 @@ func (w *Watchdog) spawnLocked(ctx context.Context) error {
 // This blocks until the context is cancelled or crash budget is exceeded.
 func (w *Watchdog) Monitor(ctx context.Context) error {
 	monitorCtx, cancel := context.WithCancel(ctx)
+	w.mu.Lock()
 	w.cancelMonitor = cancel
+	w.mu.Unlock()
 	defer cancel()
 
 	for {
@@ -165,8 +167,11 @@ func (w *Watchdog) Monitor(ctx context.Context) error {
 
 // Stop terminates the monitored process.
 func (w *Watchdog) Stop() {
-	if w.cancelMonitor != nil {
-		w.cancelMonitor()
+	w.mu.Lock()
+	cancelFn := w.cancelMonitor
+	w.mu.Unlock()
+	if cancelFn != nil {
+		cancelFn()
 	}
 
 	w.mu.Lock()

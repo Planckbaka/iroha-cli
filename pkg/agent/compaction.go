@@ -15,9 +15,10 @@ import (
 // compactionCircuitBreaker tracks consecutive compaction errors and disables
 // LLM summarization after 3 failures, falling back to truncation-only mode.
 var compactionCircuitBreaker struct {
-	mu       sync.Mutex
-	failures int
-	open     bool
+	mu          sync.Mutex
+	failures    int
+	open        bool
+	lastFailure time.Time
 }
 
 // stickyMarker is the sentinel string that marks content blocks as preserved
@@ -173,6 +174,11 @@ func CompactContents(contents []*genai.Content, sessionID string, llm ...model.L
 		// Circuit breaker check: if open, use truncation-only mode
 		compactionCircuitBreaker.mu.Lock()
 		isOpen := compactionCircuitBreaker.open
+		if isOpen && time.Since(compactionCircuitBreaker.lastFailure) > 5*time.Minute {
+			compactionCircuitBreaker.open = false
+			compactionCircuitBreaker.failures = 0
+			isOpen = false
+		}
 		failCount := compactionCircuitBreaker.failures
 		compactionCircuitBreaker.mu.Unlock()
 
@@ -199,6 +205,7 @@ func CompactContents(contents []*genai.Content, sessionID string, llm ...model.L
 		if compactionErr != nil || summaryText == "" {
 			compactionCircuitBreaker.mu.Lock()
 			compactionCircuitBreaker.failures++
+				compactionCircuitBreaker.lastFailure = time.Now()
 			failures := compactionCircuitBreaker.failures
 			if failures >= 3 {
 				compactionCircuitBreaker.open = true

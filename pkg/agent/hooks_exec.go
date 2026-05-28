@@ -30,6 +30,7 @@ func (hm *HookManager) RunHooks(event HookEvent, ctx HookContext) HookResult {
 
 		if def.Async {
 			go func(d HookDef, c HookContext) {
+		defer func() { if r := recover(); r != nil { LogError(CatSession, "async_hook_panic", fmt.Sprintf("Async hook panicked: %v", r), nil, nil) } }()
 				_ = hm.runOne(event, d, c)
 			}(def, ctx)
 			continue
@@ -246,6 +247,13 @@ or:
 		}
 	}
 
+		// Strict: extract only the first { ... } block to prevent multi-JSON injection.
+		if startIdx := strings.Index(responseText, "{"); startIdx >= 0 {
+			if endIdx := strings.LastIndex(responseText, "}"); endIdx > startIdx {
+				responseText = responseText[startIdx : endIdx+1]
+			}
+		}
+
 	return parseJSONResult(event, []byte(responseText), durationMS, ctx, 0)
 }
 
@@ -292,7 +300,13 @@ func (hm *HookManager) runCommand(event HookEvent, def HookDef, ctx HookContext)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, "sh", "-c", def.Command)
-	cmd.Env = append(os.Environ(), extraEnv...)
+	// Whitelist env vars to avoid leaking secrets to hook subprocesses
+	cmd.Env = extraEnv
+	for _, key := range []string{"HOME", "PATH", "LANG", "TERM", "USER", "TMPDIR", "SHELL", "PWD"} {
+		if val, ok := os.LookupEnv(key); ok {
+			cmd.Env = append(cmd.Env, key+"="+val)
+		}
+	}
 
 	// Populate Stdin JSON payload
 	var stdinBuf bytes.Buffer

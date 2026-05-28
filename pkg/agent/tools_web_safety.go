@@ -69,6 +69,8 @@ var privateNets = []net.IPNet{
 	mustParseCIDR("127.0.0.0/8"),
 	mustParseCIDR("169.254.0.0/16"),
 	mustParseCIDR("::1/128"),
+	mustParseCIDR("fe80::/10"),
+	mustParseCIDR("fc00::/7"),
 }
 
 func mustParseCIDR(s string) net.IPNet {
@@ -80,6 +82,10 @@ func mustParseCIDR(s string) net.IPNet {
 }
 
 func isPrivateIP(ip net.IP) bool {
+	// Check IPv4-mapped IPv6 addresses (e.g. ::ffff:10.0.0.1)
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
 	for _, n := range privateNets {
 		if n.Contains(ip) {
 			return true
@@ -132,6 +138,9 @@ var ssrfSafeClient = &http.Client{
 	Transport: ssrfSafeTransport,
 	Timeout:   30 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if err := checkSSRF(req.URL); err != nil {
+				return err
+			}
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
 		}
