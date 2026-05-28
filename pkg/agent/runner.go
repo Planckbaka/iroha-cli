@@ -24,18 +24,20 @@ import (
 	"google.golang.org/genai"
 )
 
-// runnerHooks implements llm.AdapterHooks using the agent package's global managers.
-type runnerHooks struct{}
+// runnerHooks implements llm.AdapterHooks using an injected TodoManager.
+type runnerHooks struct {
+	todo *TodoManager
+}
 
-func (runnerHooks) NagReminder() string {
-	if GlobalTodoManager.RoundsSinceUpdate() >= 3 {
+func (h runnerHooks) NagReminder() string {
+	if h.todo.RoundsSinceUpdate() >= 3 {
 		return "📌 [System] To ensure continuity of subsequent code changes, please update your todo plan progress before executing the current step."
 	}
 	return ""
 }
 
-func (runnerHooks) NoteRound() {
-	GlobalTodoManager.NoteRoundWithoutUpdate()
+func (h runnerHooks) NoteRound() {
+	h.todo.NoteRoundWithoutUpdate()
 }
 
 func buildSystemPrompt() string {
@@ -111,6 +113,7 @@ type RunnerDeps struct {
 	PermissionManager  *PermissionManager
 	TaskManager        *TaskManager
 	MCPRouter          *MCPToolRouter
+	Bridge             *ConfirmationBridge
 }
 
 // CustomRunner wraps ADK runner and manages background execution
@@ -152,7 +155,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 
 	// 2. Create our abstract model adapter
 	systemPrompt := buildSystemPrompt()
-	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{})
+	modelAdapter, err := llm.NewAdapter(g, provider, modelName, apiKey, baseURL, systemPrompt, apiFormat, runnerHooks{todo: GlobalTodoManager})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model adapter: %w", err)
 	}
@@ -277,6 +280,7 @@ func NewCustomRunner(provider llm.ProviderType, modelName string, apiKey string,
 			PermissionManager:  GlobalPermissionManager,
 			TaskManager:        GlobalTaskManager,
 			MCPRouter:          GlobalMCPRouter,
+				Bridge:             Bridge,
 		},
 	}, nil
 }
@@ -350,10 +354,10 @@ func (cr *CustomRunner) Execute(ctx context.Context, userID, sessionID, prompt s
 	})
 
 	// Reset the cancel channel for this execution turn
-	Bridge.Reset()
+	cr.deps.Bridge.Reset()
 	go func() {
 		<-ctx.Done()
-		Bridge.Cancel()
+		cr.deps.Bridge.Cancel()
 	}()
 
 	go func() {
