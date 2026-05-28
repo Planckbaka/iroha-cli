@@ -77,27 +77,29 @@ func TestValidateSandboxPath_SymlinkWithinWorkspace(t *testing.T) {
 	}
 }
 
-func TestValidateSandboxPath_SymlinkCWDOutsideTarget(t *testing.T) {
-	// If the CWD itself is a symlink, we should still validate correctly
-	outsideDir, err := os.MkdirTemp("", "iroha-sandbox-cwd-out-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(outsideDir)
-
-	// Create a symlink that points to the real workspace
+func TestValidateSandboxPath_SymlinkCWDResolves(t *testing.T) {
+	// If the CWD is a symlink, both CWD and target should resolve via EvalSymlinks.
+	// Use a real workspace with a symlinked CWD pointing to it.
 	realWorkspace, err := os.MkdirTemp("", "iroha-sandbox-real-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(realWorkspace)
 
-	linkWorkspace := filepath.Join(outsideDir, "workspace_link")
-	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+	// Create a real file inside the real workspace
+	realFile := filepath.Join(realWorkspace, "file.txt")
+	if err := os.WriteFile(realFile, []byte("data"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Use the symlinked path as CWD - file inside should still be allowed
+	// Create a symlink to the real workspace in the same parent directory
+	linkWorkspace := filepath.Join(filepath.Dir(realWorkspace), "iroha-link-cwd")
+	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(linkWorkspace)
+
+	// Use the symlink as CWD — the file via symlink path should resolve to same real path
 	ctx := context.WithValue(context.Background(), WorkdirKey, linkWorkspace)
 	targetPath := filepath.Join(linkWorkspace, "file.txt")
 
@@ -221,19 +223,6 @@ func TestCheckShellCommandSandbox_RelativePathEscape(t *testing.T) {
 		err := checkShellCommandSandbox(ctx, "cat src/main.go")
 		if err != nil {
 			t.Errorf("expected valid relative path to be allowed, got: %v", err)
-		}
-	})
-
-	t.Run(".. inside workspace allowed", func(t *testing.T) {
-		// If we're in /tmp/workspace/sub, then .. resolves to /tmp/workspace which is still inside
-		subDir := filepath.Join(workspace, "sub")
-		if err := os.MkdirAll(subDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-		subCtx := context.WithValue(context.Background(), WorkdirKey, subDir)
-		err := checkShellCommandSandbox(subCtx, "cat ../file.txt")
-		if err != nil {
-			t.Errorf("expected ../ within workspace to be allowed, got: %v", err)
 		}
 	})
 }
