@@ -7,12 +7,36 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
-
-	"iroha/pkg/config"
 )
+
+// ToolRegistry collects tools via table-driven registration.
+type ToolRegistry struct {
+	tools []tool.Tool
+	err   error
+}
+
+// register creates a functiontool from config + handler and appends it.
+func register[TArgs, TResults any](r *ToolRegistry, name, description string, handler functiontool.Func[TArgs, TResults]) {
+	if r.err != nil {
+		return
+	}
+	t, err := functiontool.New(functiontool.Config{
+		Name:        name,
+		Description: description,
+	}, handler)
+	if err != nil {
+		r.err = fmt.Errorf("register tool %q: %w", name, err)
+		return
+	}
+	r.tools = append(r.tools, t)
+}
+
+// lspConfigOnce guards one-time loading of user LSP server config.
+var lspConfigOnce sync.Once
 
 // WrapToolError enriches tool errors with actionable self-correction suggestions for the LLM
 func WrapToolError(toolName string, args any, err error) error {
@@ -61,6 +85,7 @@ func resolvePath(ctx context.Context, path string) string {
 }
 
 // validateSandboxPath checks if the resolved absolute path resides under the current working directory.
+// It resolves symlinks on both the CWD and the target path to prevent symlink-based escapes.
 func validateSandboxPath(ctx context.Context, rawPath string) error {
 	cwd := getWorkdir(ctx)
 
@@ -69,8 +94,21 @@ func validateSandboxPath(ctx context.Context, rawPath string) error {
 		return fmt.Errorf("invalid path format '%s': %w", rawPath, err)
 	}
 
-	cleanCWD := filepath.Clean(cwd)
-	cleanAbs := filepath.Clean(absPath)
+	// Resolve symlinks for both CWD and target to prevent symlink-based escape.
+	// filepath.EvalSymlinks resolves all symlinks in the path.
+	evalCWD, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		// If the CWD can't be resolved (e.g. deleted), fall back to cleaned path
+		evalCWD = filepath.Clean(cwd)
+	}
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		// If the target doesn't exist or can't be resolved, fall back to cleaned path
+		evalPath = filepath.Clean(absPath)
+	}
+
+	cleanCWD := filepath.Clean(evalCWD)
+	cleanAbs := filepath.Clean(evalPath)
 
 	if cleanAbs != cleanCWD && !strings.HasPrefix(cleanAbs, cleanCWD+string(os.PathSeparator)) {
 		return fmt.Errorf("security sandbox blocked: path '%s' is outside the workspace root '%s'", rawPath, cleanCWD)
@@ -78,7 +116,8 @@ func validateSandboxPath(ctx context.Context, rawPath string) error {
 	return nil
 }
 
-// checkShellCommandSandbox scans a shell command for relative path escaping or out-of-bounds absolute path accesses.
+// checkShellCommandSandbox scans a shell command for relative path escaping, out-of-bounds absolute
+// path accesses, and environment variable expansion attempts.
 func checkShellCommandSandbox(ctx context.Context, command string) error {
 	cwd := getWorkdir(ctx)
 	cleanCWD := filepath.Clean(cwd)
@@ -115,479 +154,67 @@ func checkShellCommandSandbox(ctx context.Context, command string) error {
 				}
 			}
 		}
+
+		// 3. Detect environment variable expansion ($HOME, ${VAR}, $VAR)
+		if containsEnvVarExpansion(w) {
+			return fmt.Errorf("security sandbox blocked: detected environment variable expansion '%s' in command — use explicit paths instead", w)
+		}
 	}
 	return nil
 }
 
-// GetSWETools returns the list of SWE tools plus our new todo tool for the Agent
-func GetSWETools() ([]tool.Tool, error) {
-	readTool, err := functiontool.New(functiontool.Config{
-		Name:        "file_read",
-		Description: "Read the contents of a file at the specified relative or absolute path.",
-	}, FileReadHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	writeTool, err := functiontool.New(functiontool.Config{
-		Name:        "file_write",
-		Description: "Write the specified content to a file. This overwrites the file if it already exists.",
-	}, FileWriteHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	editTool, err := functiontool.New(functiontool.Config{
-		Name:        "file_edit",
-		Description: "Edit a file by replacing exact text matches. Supports single and replace-all modes with optional dry-run preview.",
-	}, FileEditHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	editBatchTool, err := functiontool.New(functiontool.Config{
-		Name:        "file_edit_batch",
-		Description: "Apply multiple file edits atomically. All edits succeed or none are applied. Use this when making coordinated changes across multiple locations in one or more files.",
-	}, FileEditBatchHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	grepTool, err := functiontool.New(functiontool.Config{
-		Name:        "search_grep",
-		Description: "Perform a global regex text search across the current directory, similar to grep/ripgrep.",
-	}, GrepHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	findTool, err := functiontool.New(functiontool.Config{
-		Name:        "find_files",
-		Description: "Find files matching a glob pattern. Supports ** for recursive matching. Excludes .git, node_modules, etc.",
-	}, FindHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	listDirTool, err := functiontool.New(functiontool.Config{
-		Name:        "list_directory",
-		Description: "List files and subdirectories under the specified directory. Supports recursive depth control and automatically skips large excluded directories like .git. This is the preferred tool for exploring project structure.",
-	}, ListDirHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	shellTool, err := functiontool.New(functiontool.Config{
-		Name:        "shell_run",
-		Description: "Execute a shell command. Only allowed within the current workspace directory.",
-	}, ShellRunHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	todoTool, err := functiontool.New(functiontool.Config{
-		Name:        "todo",
-		Description: "Rewrite or update the session-level plan list for the current multi-step task. Always call this tool first to create a plan for complex multi-step tasks, and update it when completing or starting steps. Exactly one task must be in the in_progress state at all times.",
-	}, TodoHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 6. memory_save — persist a durable fact across sessions
-	memorySaveTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_save",
-		Description: "Save a persistent memory entry to disk that survives across sessions. Use this for user preferences, feedback corrections, project constraints, external resource pointers, or other critical information that cannot be re-derived from the codebase. Do not use for current task state, temporary branch names, secrets, or anything directly readable from the repository.",
-	}, MemorySaveHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7. memory_list — read all currently loaded memories
-	memoryListTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_list",
-		Description: "List all currently loaded persistent memory entries in the current session, grouped by type (user/feedback/project/reference).",
-	}, MemoryListHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7b. memory_search — search memories by query
-	memorySearchTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_search",
-		Description: "Search persistent memory entries by keyword query (case-insensitive). Returns matching entries sorted by relevance.",
-	}, MemorySearchHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7c. memory_update — update an existing memory entry
-	memoryUpdateTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_update",
-		Description: "Update an existing persistent memory entry by name. Modifies the description, type, and content fields.",
-	}, MemoryUpdateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7d. memory_delete — delete a memory entry
-	memoryDeleteTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_delete",
-		Description: "Delete a persistent memory entry by name. Removes it from disk and the in-memory store.",
-	}, MemoryDeleteHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7e. memory_dream — manually trigger consolidation
-	memoryDreamTool, err := functiontool.New(functiontool.Config{
-		Name:        "memory_dream",
-		Description: "Manually trigger the 4-phase persistent memory consolidation ('Dream') pass to deduplicate, merge, and prune stored memory entries.",
-	}, MemoryDreamHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 8. task_create
-	taskCreateTool, err := functiontool.New(functiontool.Config{
-		Name:        "task_create",
-		Description: "Create a new task in the persistent task DAG. New tasks default to pending status with agent as the default owner.",
-	}, TaskCreateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 9. task_update
-	taskUpdateTool, err := functiontool.New(functiontool.Config{
-		Name:        "task_update",
-		Description: "Update an existing task in the persistent task DAG. Can modify status, upstream dependencies (blockedBy), or downstream dependencies (blocks). Any dependency cycles are rejected by DFS validation.",
-	}, TaskUpdateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 10. task_list
-	taskListTool, err := functiontool.New(functiontool.Config{
-		Name:        "task_list",
-		Description: "List all non-deleted tasks in the current persistent task DAG.",
-	}, TaskListHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 11. task_get
-	taskGetTool, err := functiontool.New(functiontool.Config{
-		Name:        "task_get",
-		Description: "Get detailed information for a specific task by its ID, including upstream/downstream dependencies and execution status.",
-	}, TaskGetHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 12. background_run
-	bgRunTool, err := functiontool.New(functiontool.Config{
-		Name:        "background_run",
-		Description: "Start a shell command in a background thread. Returns a task ID immediately without waiting for completion. Results are automatically fed back via the drain_notifications mechanism during the next interaction.",
-	}, BackgroundRunHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 13. check_background
-	bgCheckTool, err := functiontool.New(functiontool.Config{
-		Name:        "check_background",
-		Description: "Query the status and abbreviated results of all or a specific background task. If no arguments are provided, lists all background tasks.",
-	}, CheckBackgroundHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 14. schedule_create
-	schCreateTool, err := functiontool.New(functiontool.Config{
-		Name:        "schedule_create",
-		Description: "Create a new scheduled task (supports one-shot or recurring, with optional persistence). When the scheduled time arrives, the specified prompt is automatically fed to the LLM for execution.",
-	}, ScheduleCreateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 15. schedule_list
-	schListTool, err := functiontool.New(functiontool.Config{
-		Name:        "schedule_list",
-		Description: "List all currently active scheduled tasks (includes task ID, cron expression, recurring and durable properties).",
-	}, ScheduleListHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// 16. schedule_delete
-	schDeleteTool, err := functiontool.New(functiontool.Config{
-		Name:        "schedule_delete",
-		Description: "Delete an existing scheduled task by its task ID.",
-	}, ScheduleDeleteHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s15 Team Tools
-	spawnTeammateTool, err := functiontool.New(functiontool.Config{
-		Name:        "spawn_teammate",
-		Description: "Spawn and start a teammate agent in the background.",
-	}, SpawnTeammateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	listTeammatesTool, err := functiontool.New(functiontool.Config{
-		Name:        "list_teammates",
-		Description: "List the status and roles of all teammate agents in the current team.",
-	}, ListTeammatesHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	sendMessageTool, err := functiontool.New(functiontool.Config{
-		Name:        "send_message",
-		Description: "Send a message to a specific recipient's inbox.",
-	}, SendMessageHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	readInboxTool, err := functiontool.New(functiontool.Config{
-		Name:        "read_inbox",
-		Description: "Read and clear a teammate's inbox to pull new messages.",
-	}, ReadInboxHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	broadcastTool, err := functiontool.New(functiontool.Config{
-		Name:        "broadcast",
-		Description: "Broadcast a message to all team members.",
-	}, BroadcastHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s16 Protocol Tools
-	protoShutdownReqTool, err := functiontool.New(functiontool.Config{
-		Name:        "protocol_shutdown_request",
-		Description: "Initiate a formal shutdown request.",
-	}, ProtocolShutdownRequestHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	protoShutdownRespTool, err := functiontool.New(functiontool.Config{
-		Name:        "protocol_shutdown_response",
-		Description: "Approve or reject a formal shutdown request.",
-	}, ProtocolShutdownResponseHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	protoPlanApprovalReqTool, err := functiontool.New(functiontool.Config{
-		Name:        "protocol_plan_approval_request",
-		Description: "Submit a major action plan or refactoring proposal for approval.",
-	}, ProtocolPlanApprovalRequestHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	protoPlanApprovalRespTool, err := functiontool.New(functiontool.Config{
-		Name:        "protocol_plan_approval_response",
-		Description: "Approve or reject an action plan proposal.",
-	}, ProtocolPlanApprovalResponseHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s17 Autonomous Agent Tools
-	agentClaimTaskTool, err := functiontool.New(functiontool.Config{
-		Name:        "agent_claim_task",
-		Description: "Allow a teammate agent to claim all pending and unblocked tasks matching the given keywords.",
-	}, AgentClaimTaskHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	agentSetStateTool, err := functiontool.New(functiontool.Config{
-		Name:        "agent_set_state",
-		Description: "Set the agent's state. Options: WORK (focused work mode), IDLE (idle polling mode).",
-	}, AgentSetStateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s18 Worktree Tools
-	wtCreateTool, err := functiontool.New(functiontool.Config{
-		Name:        "worktree_create",
-		Description: "Create an isolated Git worktree branch for dedicated and safe development of a specific task.",
-	}, WorktreeCreateHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	wtListTool, err := functiontool.New(functiontool.Config{
-		Name:        "worktree_list",
-		Description: "List all current workspace isolation branches and directories.",
-	}, WorktreeListHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	wtStatusTool, err := functiontool.New(functiontool.Config{
-		Name:        "worktree_status",
-		Description: "Query the detailed status of a specific isolated workspace.",
-	}, WorktreeStatusHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	wtEnterTool, err := functiontool.New(functiontool.Config{
-		Name:        "worktree_enter",
-		Description: "Log entry into or activation of an isolated workspace.",
-	}, WorktreeEnterHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	wtCloseoutTool, err := functiontool.New(functiontool.Config{
-		Name:        "worktree_closeout",
-		Description: "Close out a specific isolated workspace branch. Choose to keep the path (keep) or forcefully remove it (remove).",
-	}, WorktreeCloseoutHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s19 MCP Tool
-	mcpServerListTool, err := functiontool.New(functiontool.Config{
-		Name:        "mcp_server_list",
-		Description: "List all currently connected external MCP plugin servers and their connection status.",
-	}, MCPServerListHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s20 CI Watcher Tool
-	ciWatchTool, err := functiontool.New(functiontool.Config{
-		Name:        "agent_watch_ci",
-		Description: "Start a background process to monitor GitHub Actions CI status and send inbox notifications on failures.",
-	}, AgentWatchCIHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s22 Web Tools
-	webFetchTool, err := functiontool.New(functiontool.Config{
-		Name:        "web_fetch",
-		Description: "Fetch a web page by URL and return its content as text. Only HTTP/HTTPS is supported. Private IP ranges are blocked for security. Response body limited to 1MB.",
-	}, WebFetchHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	webSearchTool, err := functiontool.New(functiontool.Config{
-		Name:        "web_search",
-		Description: "Search the web using DuckDuckGo (default) or a configured SearXNG backend. Returns structured results with title, URL, and snippet.",
-	}, WebSearchHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	spawnSubagentTool, err := functiontool.New(functiontool.Config{
-		Name:        "spawn_subagent",
-		Description: "Spawn and run a synchronous subagent to execute a specific subtask (e.g. read, search, code review, or file changes) in an isolated, sandboxed execution scope and return a summary of findings.",
-	}, SpawnSubagentHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	// s21 LSP Tools — load user LSP server config if available
-	if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
-		servers := make([]LSPServerConfig, len(cfg.LSPServers))
-		for i, s := range cfg.LSPServers {
-			servers[i] = LSPServerConfig{
-				Language:     s.Language,
-				Command:      s.Command,
-				Args:         s.Args,
-				FilePatterns: s.FilePatterns,
-			}
+// containsEnvVarExpansion checks if a token contains shell environment variable patterns
+// like $HOME, ${VAR}, or $VAR that would be expanded at execution time.
+func containsEnvVarExpansion(s string) bool {
+	n := len(s)
+	for i := 0; i < n; i++ {
+		if s[i] != '$' {
+			continue
 		}
-		SetLSPServers(servers)
+		if i+1 < n && s[i+1] == '$' {
+			i++
+			continue
+		}
+		if i+1 >= n {
+			continue
+		}
+		if s[i+1] == '{' {
+			return true
+		}
+		if s[i+1] == '_' || (s[i+1] >= 'a' && s[i+1] <= 'z') || (s[i+1] >= 'A' && s[i+1] <= 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
+// GetSWETools returns the list of SWE tools for the Agent.
+func GetSWETools() ([]tool.Tool, error) {
+	var r ToolRegistry
+
+	registerFileTools(&r)
+	registerShellTools(&r)
+	registerTodoTools(&r)
+	registerMemoryTools(&r)
+	registerTaskTools(&r)
+	registerScheduleTools(&r)
+	registerTeamTools(&r)
+	registerWorktreeTools(&r)
+	registerMCPTools(&r)
+	registerCITools(&r)
+	registerWebTools(&r)
+	registerSubagentTools(&r)
+	registerLSPTools(&r)
+
+	if r.err != nil {
+		return nil, r.err
 	}
 
-	lspGotoDefinitionTool, err := functiontool.New(functiontool.Config{
-		Name:        "lsp_goto_definition",
-		Description: "Locate the declaration and definition of a symbol at a specific line and column position via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers. Returns the defining file path, line number, and code snippet preview.",
-	}, LSPGotoDefinitionHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	lspFindReferencesTool, err := functiontool.New(functiontool.Config{
-		Name:        "lsp_find_references",
-		Description: "Find all references and usages of a symbol at a specific position across the workspace via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.",
-	}, LSPFindReferencesHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	lspDocumentSymbolsTool, err := functiontool.New(functiontool.Config{
-		Name:        "lsp_document_symbols",
-		Description: "Extract and list all semantic symbols (classes, structs, methods, functions, variables, etc.) from a specified file via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.",
-	}, LSPDocumentSymbolsHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	lspHoverTool, err := functiontool.New(functiontool.Config{
-		Name:        "lsp_hover",
-		Description: "Get type information and documentation at a specific position in a file via LSP. Returns hover content including type signatures, doc comments, and inferred types.",
-	}, LSPHoverHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	lspDiagTool, err := functiontool.New(functiontool.Config{
-		Name:        "lsp_diagnostics",
-		Description: "Get diagnostic errors and warnings for a file using the language server. Returns a list of issues with line, column, severity, and message. Uses pull diagnostics (LSP 3.17+); falls back to empty if the server does not support it.",
-	}, LSPDiagnosticsHandler)
-	if err != nil {
-		return nil, err
-	}
-
-	resTools := []tool.Tool{
-		readTool, writeTool, editTool, editBatchTool, listDirTool, grepTool, findTool, shellTool, todoTool,
-		memorySaveTool, memoryListTool, memorySearchTool, memoryUpdateTool, memoryDeleteTool, memoryDreamTool,
-		taskCreateTool, taskUpdateTool, taskListTool, taskGetTool,
-		bgRunTool, bgCheckTool,
-		schCreateTool, schListTool, schDeleteTool,
-
-		// s15
-		spawnTeammateTool, listTeammatesTool, sendMessageTool, readInboxTool, broadcastTool,
-		// s16
-		protoShutdownReqTool, protoShutdownRespTool, protoPlanApprovalReqTool, protoPlanApprovalRespTool,
-		// s17
-		agentClaimTaskTool, agentSetStateTool,
-		// s18
-		wtCreateTool, wtListTool, wtStatusTool, wtEnterTool, wtCloseoutTool,
-		// s19
-		mcpServerListTool,
-		// s20
-		ciWatchTool,
-		// s21
-		lspGotoDefinitionTool, lspFindReferencesTool, lspDocumentSymbolsTool, lspHoverTool, lspDiagTool,
-		// s22
-		webFetchTool, webSearchTool,
-		spawnSubagentTool,
-	}
-
-	// s19 Dynamic MCP Tools
+	// Dynamic MCP plugin tools
 	_ = GlobalMCPRouter.LoadAndStartPlugins()
 	if mcpTools, err := GlobalMCPRouter.DiscoverTools(); err == nil {
-		resTools = append(resTools, mcpTools...)
+		r.tools = append(r.tools, mcpTools...)
 	}
 
-	return resTools, nil
+	return r.tools, nil
 }

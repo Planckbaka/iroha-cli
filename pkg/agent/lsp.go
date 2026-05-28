@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"google.golang.org/adk/tool"
+
+	"iroha/pkg/config"
 )
 
 type jsonrpcRequest struct {
@@ -1113,4 +1115,28 @@ func severityToString(severity int) string {
 	default:
 		return "info"
 	}
+}
+
+func registerLSPTools(r *ToolRegistry) {
+	// Lazily load user LSP server config once.
+	lspConfigOnce.Do(func() {
+		if cfg, err := config.LoadConfig(); err == nil && len(cfg.LSPServers) > 0 {
+			servers := make([]LSPServerConfig, len(cfg.LSPServers))
+			for i, s := range cfg.LSPServers {
+				servers[i] = LSPServerConfig{
+					Language:     s.Language,
+					Command:      s.Command,
+					Args:         s.Args,
+					FilePatterns: s.FilePatterns,
+				}
+			}
+			SetLSPServers(servers)
+		}
+	})
+
+	register(r,"lsp_goto_definition", "Locate the declaration and definition of a symbol at a specific line and column position via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers. Returns the defining file path, line number, and code snippet preview.", LSPGotoDefinitionHandler)
+	register(r,"lsp_find_references", "Find all references and usages of a symbol at a specific position across the workspace via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.", LSPFindReferencesHandler)
+	register(r,"lsp_document_symbols", "Extract and list all semantic symbols (classes, structs, methods, functions, variables, etc.) from a specified file via LSP. Supports Go, TypeScript, Python, Rust, and other configured language servers.", LSPDocumentSymbolsHandler)
+	register(r,"lsp_hover", "Get type information and documentation at a specific position in a file via LSP. Returns hover content including type signatures, doc comments, and inferred types.", LSPHoverHandler)
+	register(r,"lsp_diagnostics", "Get diagnostic errors and warnings for a file using the language server. Returns a list of issues with line, column, severity, and message. Uses pull diagnostics (LSP 3.17+); falls back to empty if the server does not support it.", LSPDiagnosticsHandler)
 }

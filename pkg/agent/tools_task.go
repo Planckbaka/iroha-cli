@@ -124,3 +124,10 @@ func TaskGetHandler(ctx tool.Context, args TaskGetArgs) (TaskGetResult, error) {
 	}
 	return TaskGetResult{Task: task}, nil
 }
+
+func registerTaskTools(r *ToolRegistry) {
+	register(r, "task_create", "Create a new task in the persistent task DAG. New tasks default to pending status with agent as the default owner.", TaskCreateHandler)
+	register(r, "task_update", "Update an existing task in the persistent task DAG. Can modify status, upstream dependencies (blockedBy), or downstream dependencies (blocks). Any dependency cycles are rejected by DFS validation.", TaskUpdateHandler)
+	register(r, "task_list", "List all non-deleted tasks in the current persistent task DAG.", TaskListHandler)
+	register(r, "task_get", "Get detailed information for a specific task by its ID, including upstream/downstream dependencies and execution status.", TaskGetHandler)
+}

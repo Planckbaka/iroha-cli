@@ -49,3 +49,9 @@ func ScheduleDeleteHandler(ctx tool.Context, args ScheduleDeleteArgs) (ScheduleD
 	}
 	return ScheduleDeleteResult{Message: msg}, nil
 }
+
+func registerScheduleTools(r *ToolRegistry) {
+	register(r, "schedule_create", "Create a new scheduled task (supports one-shot or recurring, with optional persistence). When the scheduled time arrives, the specified prompt is automatically fed to the LLM for execution.", ScheduleCreateHandler)
+	register(r, "schedule_list", "List all currently active scheduled tasks (includes task ID, cron expression, recurring and durable properties).", ScheduleListHandler)
+	register(r, "schedule_delete", "Delete an existing scheduled task by its task ID.", ScheduleDeleteHandler)
+}

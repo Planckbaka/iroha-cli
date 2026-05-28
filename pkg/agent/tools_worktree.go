@@ -56,7 +56,7 @@ func WorktreeStatusHandler(ctx tool.Context, args WorktreeStatusArgs) (WorktreeS
 	GlobalWorktreeManager.mu.RUnlock()
 
 	if !ok {
-		return WorktreeStatusResult{}, fmt.Errorf("worktree '%s' not found", args.Name)
+		return WorktreeStatusResult{}, WrapToolError("worktree_status", args, fmt.Errorf("worktree '%s' not found", args.Name))
 	}
 	return WorktreeStatusResult{Name: entry.Name, Status: entry.Status, TaskID: entry.TaskID}, nil
 }
@@ -93,4 +93,12 @@ func WorktreeCloseoutHandler(ctx tool.Context, args WorktreeCloseoutArgs) (Workt
 		return WorktreeCloseoutResult{Success: false}, WrapToolError("worktree_closeout", args, err)
 	}
 	return WorktreeCloseoutResult{Success: true}, nil
+}
+
+func registerWorktreeTools(r *ToolRegistry) {
+	register(r, "worktree_create", "Create an isolated Git worktree branch for dedicated and safe development of a specific task.", WorktreeCreateHandler)
+	register(r, "worktree_list", "List all current workspace isolation branches and directories.", WorktreeListHandler)
+	register(r, "worktree_status", "Query the detailed status of a specific isolated workspace.", WorktreeStatusHandler)
+	register(r, "worktree_enter", "Log entry into or activation of an isolated workspace.", WorktreeEnterHandler)
+	register(r, "worktree_closeout", "Close out a specific isolated workspace branch. Choose to keep the path (keep) or forcefully remove it (remove).", WorktreeCloseoutHandler)
 }

@@ -512,3 +512,9 @@ func searxngSearch(searxngURL, query string, count int) (WebSearchResult, error)
 
 	return WebSearchResult{Results: results}, nil
 }
+
+
+func registerWebTools(r *ToolRegistry) {
+	register(r, "web_fetch", "Fetch a web page by URL and return its content as text. Only HTTP/HTTPS is supported. Private IP ranges are blocked for security. Response body limited to 1MB.", WebFetchHandler)
+	register(r, "web_search", "Search the web using DuckDuckGo (default) or a configured SearXNG backend. Returns structured results with title, URL, and snippet.", WebSearchHandler)
+}

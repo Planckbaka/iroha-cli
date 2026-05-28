@@ -87,3 +87,7 @@ func AgentWatchCIHandler(ctx tool.Context, args CIWatchArgs) (CIWatchResult, err
 		Message: "CI Watcher has been started in the background. You will receive an Inbox message when it completes.",
 	}, nil
 }
+
+func registerCITools(r *ToolRegistry) {
+	register(r, "agent_watch_ci", "Start a background process to monitor GitHub Actions CI status and send inbox notifications on failures.", AgentWatchCIHandler)
+}

@@ -51,7 +51,7 @@ func ShellRunHandler(ctx tool.Context, args ShellRunArgs) (ShellRunResult, error
 	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		return ShellRunResult{}, err
+		return ShellRunResult{}, WrapToolError("shell_run", args, err)
 	}
 	defer func() { _ = cmd.Process.Kill() }()
 
@@ -142,4 +142,10 @@ func CheckBackgroundHandler(ctx tool.Context, args CheckBackgroundArgs) (CheckBa
 		return CheckBackgroundResult{}, WrapToolError("check_background", args, err)
 	}
 	return CheckBackgroundResult{Output: out}, nil
+}
+
+func registerShellTools(r *ToolRegistry) {
+	register(r, "shell_run", "Execute a shell command. Only allowed within the current workspace directory.", ShellRunHandler)
+	register(r, "background_run", "Start a shell command in a background thread. Returns a task ID immediately without waiting for completion. Results are automatically fed back via the drain_notifications mechanism during the next interaction.", BackgroundRunHandler)
+	register(r, "check_background", "Query the status and abbreviated results of all or a specific background task. If no arguments are provided, lists all background tasks.", CheckBackgroundHandler)
 }

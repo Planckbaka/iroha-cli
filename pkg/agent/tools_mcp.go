@@ -14,3 +14,7 @@ func MCPServerListHandler(ctx tool.Context, args MCPServerListArgs) (MCPServerLi
 	list := GlobalMCPRouter.ListServers()
 	return MCPServerListResult{Servers: list}, nil
 }
+
+func registerMCPTools(r *ToolRegistry) {
+	register(r, "mcp_server_list", "List all currently connected external MCP plugin servers and their connection status.", MCPServerListHandler)
+}

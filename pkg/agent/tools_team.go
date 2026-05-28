@@ -215,3 +215,20 @@ func AgentSetStateHandler(ctx tool.Context, args AgentSetStateArgs) (AgentSetSta
 	GlobalAutonomyManager.SetState(s)
 	return AgentSetStateResult{Success: true, State: string(s)}, nil
 }
+
+func registerTeamTools(r *ToolRegistry) {
+	// Team communication
+	register(r, "spawn_teammate", "Spawn and start a teammate agent in the background.", SpawnTeammateHandler)
+	register(r, "list_teammates", "List the status and roles of all teammate agents in the current team.", ListTeammatesHandler)
+	register(r, "send_message", "Send a message to a specific recipient's inbox.", SendMessageHandler)
+	register(r, "read_inbox", "Read and clear a teammate's inbox to pull new messages.", ReadInboxHandler)
+	register(r, "broadcast", "Broadcast a message to all team members.", BroadcastHandler)
+	// Protocol
+	register(r, "protocol_shutdown_request", "Initiate a formal shutdown request.", ProtocolShutdownRequestHandler)
+	register(r, "protocol_shutdown_response", "Approve or reject a formal shutdown request.", ProtocolShutdownResponseHandler)
+	register(r, "protocol_plan_approval_request", "Submit a major action plan or refactoring proposal for approval.", ProtocolPlanApprovalRequestHandler)
+	register(r, "protocol_plan_approval_response", "Approve or reject an action plan proposal.", ProtocolPlanApprovalResponseHandler)
+	// Autonomous agent
+	register(r, "agent_claim_task", "Allow a teammate agent to claim all pending and unblocked tasks matching the given keywords.", AgentClaimTaskHandler)
+	register(r, "agent_set_state", "Set the agent's state. Options: WORK (focused work mode), IDLE (idle polling mode).", AgentSetStateHandler)
+}

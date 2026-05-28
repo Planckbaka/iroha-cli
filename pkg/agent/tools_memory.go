@@ -145,3 +145,12 @@ func MemoryDreamHandler(_ tool.Context, args MemoryDreamArgs) (MemoryDreamResult
 		Phases:  phases,
 	}, nil
 }
+
+func registerMemoryTools(r *ToolRegistry) {
+	register(r,"memory_save", "Save a persistent memory entry to disk that survives across sessions. Use this for user preferences, feedback corrections, project constraints, external resource pointers, or other critical information that cannot be re-derived from the codebase. Do not use for current task state, temporary branch names, secrets, or anything directly readable from the repository.", MemorySaveHandler)
+	register(r,"memory_list", "List all currently loaded persistent memory entries in the current session, grouped by type (user/feedback/project/reference).", MemoryListHandler)
+	register(r,"memory_search", "Search persistent memory entries by keyword query (case-insensitive). Returns matching entries sorted by relevance.", MemorySearchHandler)
+	register(r,"memory_update", "Update an existing persistent memory entry by name. Modifies the description, type, and content fields.", MemoryUpdateHandler)
+	register(r,"memory_delete", "Delete a persistent memory entry by name. Removes it from disk and the in-memory store.", MemoryDeleteHandler)
+	register(r,"memory_dream", "Manually trigger the 4-phase persistent memory consolidation ('Dream') pass to deduplicate, merge, and prune stored memory entries.", MemoryDreamHandler)
+}

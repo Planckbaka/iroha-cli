@@ -545,7 +545,10 @@ func GrepHandler(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 		return nil
 	})
 
-	return GrepResult{Matches: matches}, err
+	if err != nil {
+		return GrepResult{}, WrapToolError("search_grep", args, err)
+	}
+	return GrepResult{Matches: matches}, nil
 }
 
 // 5. find_files
@@ -778,4 +781,14 @@ func FileEditBatchHandler(ctx tool.Context, args FileEditBatchArgs) (FileEditBat
 		Message: fmt.Sprintf("Successfully applied %d edits atomically", len(plans)),
 		Diffs:   diffs,
 	}, nil
+}
+
+func registerFileTools(r *ToolRegistry) {
+	register(r, "file_read", "Read the contents of a file at the specified relative or absolute path.", FileReadHandler)
+	register(r, "file_write", "Write the specified content to a file. This overwrites the file if it already exists.", FileWriteHandler)
+	register(r, "file_edit", "Edit a file by replacing exact text matches. Supports single and replace-all modes with optional dry-run preview.", FileEditHandler)
+	register(r, "file_edit_batch", "Apply multiple file edits atomically. All edits succeed or none are applied. Use this when making coordinated changes across multiple locations in one or more files.", FileEditBatchHandler)
+	register(r, "search_grep", "Perform a global regex text search across the current directory, similar to grep/ripgrep.", GrepHandler)
+	register(r, "find_files", "Find files matching a glob pattern. Supports ** for recursive matching. Excludes .git, node_modules, etc.", FindHandler)
+	register(r, "list_directory", "List files and subdirectories under the specified directory. Supports recursive depth control and automatically skips large excluded directories like .git. This is the preferred tool for exploring project structure.", ListDirHandler)
 }
