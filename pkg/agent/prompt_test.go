@@ -273,3 +273,252 @@ func TestPromptBuilderLayeredAGENTSAndSKILLFolder(t *testing.T) {
 		t.Errorf("expected prompt to contain recursive skill SKILL.md, got: %s", prompt)
 	}
 }
+
+func TestHashSection_Deterministic(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	content := "test content for hashing"
+	h1 := b.hashSection(content)
+	h2 := b.hashSection(content)
+	if h1 != h2 {
+		t.Errorf("hashSection should be deterministic: got %q then %q", h1, h2)
+	}
+	if len(h1) != 16 {
+		t.Errorf("expected 16-char hash, got %d chars: %q", len(h1), h1)
+	}
+}
+
+func TestHashSection_DifferentInputs(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	h1 := b.hashSection("content A")
+	h2 := b.hashSection("content B")
+	if h1 == h2 {
+		t.Error("different inputs should produce different hashes")
+	}
+}
+
+func TestMarkStale(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	b.sectionHashes["section_a"] = "hash1"
+	b.sectionHashes["section_b"] = "hash2"
+
+	b.MarkStale("section_a")
+
+	if _, ok := b.sectionHashes["section_a"]; ok {
+		t.Error("expected section_a to be removed from hashes")
+	}
+	if _, ok := b.sectionHashes["section_b"]; !ok {
+		t.Error("expected section_b to still exist in hashes")
+	}
+
+	// Mark non-existent section should not panic
+	b.MarkStale("non_existent")
+}
+
+func TestMaybeCached_Uncached(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	content := "full section content"
+	hash := b.hashSection(content)
+
+	result := b.maybeCached("test_section", content, hash)
+	if result != content {
+		t.Errorf("uncached section should return full content, got: %q", result)
+	}
+}
+
+func TestMaybeCached_Cached(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	content := "full section content"
+	hash := b.hashSection(content)
+
+	// Simulate a prior call that stored the hash
+	b.sectionHashes["test_section"] = hash
+
+	result := b.maybeCached("test_section", content, hash)
+	if !strings.Contains(result, "cached:") {
+		t.Errorf("cached section should return cached marker, got: %q", result)
+	}
+	if strings.Contains(result, content) {
+		t.Error("cached section should NOT contain full content")
+	}
+}
+
+func TestMaybeCached_HashChanged(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	b.sectionHashes["test_section"] = "old_hash"
+
+	content := "new content"
+	newHash := b.hashSection(content)
+
+	result := b.maybeCached("test_section", content, newHash)
+	if result != content {
+		t.Errorf("changed hash should return full content, got: %q", result)
+	}
+}
+
+func TestFindProjectRoot(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(tmpDir string) string // returns workdir
+		wantRoot  func(tmpDir string) string // returns expected root
+	}{
+		{
+			"git_marker",
+			func(tmpDir string) string {
+				os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
+				os.WriteFile(filepath.Join(tmpDir, ".git"), []byte(""), 0644)
+				return filepath.Join(tmpDir, "sub")
+			},
+			func(tmpDir string) string { return tmpDir },
+		},
+		{
+			"go_mod_marker",
+			func(tmpDir string) string {
+				os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
+				os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+				return filepath.Join(tmpDir, "sub")
+			},
+			func(tmpDir string) string { return tmpDir },
+		},
+		{
+			"iroha_marker",
+			func(tmpDir string) string {
+				os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
+				os.MkdirAll(filepath.Join(tmpDir, ".iroha"), 0755)
+				return filepath.Join(tmpDir, "sub")
+			},
+			func(tmpDir string) string { return tmpDir },
+		},
+		{
+			"go_claude_marker",
+			func(tmpDir string) string {
+				os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
+				os.MkdirAll(filepath.Join(tmpDir, ".go-claude"), 0755)
+				return filepath.Join(tmpDir, "sub")
+			},
+			func(tmpDir string) string { return tmpDir },
+		},
+		{
+			"no_marker_fallback",
+			func(tmpDir string) string {
+				os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
+				return filepath.Join(tmpDir, "sub")
+			},
+			func(tmpDir string) string { return filepath.Join(tmpDir, "sub") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "iroha-project-root-*")
+			if err != nil {
+				t.Fatalf("failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			workdir := tt.setup(tmpDir)
+			expected := tt.wantRoot(tmpDir)
+
+			got := findProjectRoot(workdir)
+			if got != expected {
+				t.Errorf("findProjectRoot(%q) = %q, want %q", workdir, got, expected)
+			}
+		})
+	}
+}
+
+func TestGetUniqueSkillDirs_Deduplication(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "iroha-skill-dirs-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create .iroha/skills and .go-claude/skills at same location
+	os.MkdirAll(filepath.Join(tmpDir, ".iroha", "skills"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+
+	dirs := getUniqueSkillDirs(tmpDir)
+
+	seen := make(map[string]int)
+	for _, d := range dirs {
+		seen[d]++
+	}
+	for d, count := range seen {
+		if count > 1 {
+			t.Errorf("duplicate dir found: %s (count %d)", d, count)
+		}
+	}
+}
+
+func TestReadSkills_SkipsNonMdFiles(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "iroha-skills-nonmd-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	skillsDir := filepath.Join(tmpDir, ".iroha", "skills")
+	os.MkdirAll(skillsDir, 0755)
+	os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+
+	// Create non-.md file
+	os.WriteFile(filepath.Join(skillsDir, "config.yaml"), []byte("key: value"), 0644)
+	// Create a valid .md file
+	os.WriteFile(filepath.Join(skillsDir, "valid.md"), []byte("Valid skill content"), 0644)
+
+	b := &SystemPromptBuilder{workdir: tmpDir, sectionHashes: make(map[string]string)}
+	result := b.readSkills()
+
+	if !strings.Contains(result, "valid") {
+		t.Error("expected valid.md skill to be loaded")
+	}
+	if strings.Contains(result, "config.yaml") {
+		t.Error("non-.md files should be skipped")
+	}
+}
+
+func TestReadSkills_SkipsSubdirsWithoutSkillMd(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "iroha-skills-noskillmd-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	skillsDir := filepath.Join(tmpDir, ".iroha", "skills")
+	os.MkdirAll(filepath.Join(skillsDir, "empty-subdir"), 0755)
+	os.MkdirAll(filepath.Join(skillsDir, "with-skill"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+	os.WriteFile(filepath.Join(skillsDir, "with-skill", "SKILL.md"), []byte("Nested skill content"), 0644)
+
+	b := &SystemPromptBuilder{workdir: tmpDir, sectionHashes: make(map[string]string)}
+	result := b.readSkills()
+
+	if !strings.Contains(result, "with-skill") {
+		t.Error("expected subdir with SKILL.md to be loaded")
+	}
+	if strings.Contains(result, "empty-subdir") {
+		t.Error("empty subdirs should be skipped")
+	}
+}
+
+func TestBuildWithPrompt_ContainsDynamicBoundary(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	prompt := b.BuildWithPrompt("test prompt")
+	if !strings.Contains(prompt, "=== DYNAMIC_BOUNDARY ===") {
+		t.Error("expected DYNAMIC_BOUNDARY in BuildWithPrompt output")
+	}
+	if !strings.Contains(prompt, "Current Local Time:") {
+		t.Error("expected time section in dynamic boundary")
+	}
+}
+
+func TestBuild_DelegatesToBuildWithPrompt(t *testing.T) {
+	b := NewSystemPromptBuilder()
+	result := b.Build()
+	if result == "" {
+		t.Error("Build() should return non-empty string")
+	}
+	if !strings.Contains(result, "You are Iroha") {
+		t.Error("Build() should contain core persona")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"iroha/pkg/llm"
 
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
@@ -443,3 +445,126 @@ func TestSelfHealingPostEditHook(t *testing.T) {
 		t.Errorf("expected warning to contain the compiler error output for broken.go, got %q", additionalCtx)
 	}
 }
+
+func TestRunnerHooks_NagReminder(t *testing.T) {
+	defer GlobalTodoManager.ResetRounds()
+
+	hooks := runnerHooks{}
+
+	// With 0 rounds, should return empty
+	GlobalTodoManager.ResetRounds()
+	if hooks.NagReminder() != "" {
+		t.Error("expected empty nag reminder when rounds < 3")
+	}
+
+	// Simulate rounds >= 3 by calling NoteRoundWithoutUpdate
+	for i := 0; i < 3; i++ {
+		GlobalTodoManager.NoteRoundWithoutUpdate()
+	}
+
+	reminder := hooks.NagReminder()
+	if reminder == "" {
+		t.Error("expected non-empty nag reminder when rounds >= 3")
+	}
+	if !strings.Contains(reminder, "todo") && !strings.Contains(reminder, "Todo") {
+		t.Errorf("expected reminder to mention todo, got: %q", reminder)
+	}
+}
+
+func TestRunnerHooks_NoteRound(t *testing.T) {
+	hooks := runnerHooks{}
+	// Should not panic
+	hooks.NoteRound()
+}
+
+func TestCustomRunner_ModelName_NilModel(t *testing.T) {
+	cr := &CustomRunner{llmModel: nil}
+	if name := cr.ModelName(); name != "Unknown" {
+		t.Errorf("expected 'Unknown' for nil model, got %q", name)
+	}
+}
+
+func TestCustomRunner_GetTokenUsage_NilModel(t *testing.T) {
+	cr := &CustomRunner{llmModel: nil}
+	if usage := cr.GetTokenUsage(); usage != 0 {
+		t.Errorf("expected 0 for nil model, got %d", usage)
+	}
+}
+
+func TestBuildSystemPrompt_NonEmpty(t *testing.T) {
+	prompt := buildSystemPrompt()
+	if prompt == "" {
+		t.Error("buildSystemPrompt() should return non-empty string")
+	}
+	if !strings.Contains(prompt, "You are Iroha") {
+		t.Error("buildSystemPrompt() should contain core persona")
+	}
+}
+
+func TestDynamicLLMDelegator_SetModel(t *testing.T) {
+	mockLLM := &mockLLMForDelegator{name: "model-a"}
+	d := &DynamicLLMDelegator{currentModel: mockLLM}
+
+	if d.Name() != "model-a" {
+		t.Errorf("expected 'model-a', got %q", d.Name())
+	}
+
+	mockLLM2 := &mockLLMForDelegator{name: "model-b"}
+	d.SetModel(mockLLM2)
+
+	if d.Name() != "model-b" {
+		t.Errorf("expected 'model-b' after SetModel, got %q", d.Name())
+	}
+}
+
+func TestDynamicLLMDelegator_CumulativeTokens(t *testing.T) {
+	d := &DynamicLLMDelegator{currentModel: &nonTokenTrackerModel{}}
+
+	if tokens := d.CumulativeTokens(); tokens != 0 {
+		t.Errorf("expected 0 for non-token-tracker, got %d", tokens)
+	}
+}
+
+func TestDynamicLLMDelegator_AddTokens(t *testing.T) {
+	tracker := &mockTokenTracker{tokens: 0}
+	d := &DynamicLLMDelegator{currentModel: tracker}
+
+	d.AddTokens(100)
+	if tracker.tokens != 100 {
+		t.Errorf("expected 100 tokens, got %d", tracker.tokens)
+	}
+
+	// AddTokens on non-tracker should not panic
+	d.SetModel(&nonTokenTrackerModel{})
+	d.AddTokens(50) // should not panic
+}
+
+// mockLLMForDelegator is a minimal model.LLM implementation for testing.
+type mockLLMForDelegator struct {
+	name string
+}
+
+func (m *mockLLMForDelegator) Name() string { return m.name }
+func (m *mockLLMForDelegator) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {}
+}
+
+type nonTokenTrackerModel struct {
+	mockLLMForDelegator
+}
+
+func (m *nonTokenTrackerModel) Name() string { return "non-tracker" }
+func (m *nonTokenTrackerModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {}
+}
+
+type mockTokenTracker struct {
+	tokens int
+}
+
+func (m *mockTokenTracker) Name() string { return "tracker" }
+func (m *mockTokenTracker) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {}
+}
+func (m *mockTokenTracker) CumulativeTokens() int { return m.tokens }
+func (m *mockTokenTracker) AddTokens(n int)       { m.tokens += n }
