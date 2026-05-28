@@ -449,7 +449,7 @@ func TestSelfHealingPostEditHook(t *testing.T) {
 func TestRunnerHooks_NagReminder(t *testing.T) {
 	defer GlobalTodoManager.ResetRounds()
 
-	hooks := runnerHooks{}
+	hooks := runnerHooks{todo: GlobalTodoManager}
 
 	// With 0 rounds, should return empty
 	GlobalTodoManager.ResetRounds()
@@ -472,7 +472,7 @@ func TestRunnerHooks_NagReminder(t *testing.T) {
 }
 
 func TestRunnerHooks_NoteRound(t *testing.T) {
-	hooks := runnerHooks{}
+	hooks := runnerHooks{todo: GlobalTodoManager}
 	// Should not panic
 	hooks.NoteRound()
 }
